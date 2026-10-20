@@ -1,0 +1,13 @@
+{
+  "name": "kart-racer",
+  "version": "1.0.0",
+  "description": "網頁 3D 道具賽車遊戲（第一階段：鍵盤版）",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "three": "0.186.1"
+  }
+}
