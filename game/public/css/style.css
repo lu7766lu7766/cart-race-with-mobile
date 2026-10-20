@@ -1,0 +1,456 @@
+/* ============================================================
+   style.css — 賽車遊戲全域樣式與 HUD 介面視覺設計
+   包含全螢幕 3D Canvas、大螢幕投影大字階、四角玩家狀態卡片、
+   動態小地圖、倒數浮層、結算表與 CSS2D 3D 浮動姓名標籤。
+   ============================================================ */
+
+:root {
+  --primary-color: #f1c40f;
+  --bg-dark: rgba(18, 20, 26, 0.88);
+  --card-bg: rgba(26, 30, 40, 0.85);
+  --text-light: #f5f6fa;
+  --text-muted: #a4b0be;
+  --accent-red: #e74c3c;
+  --accent-green: #2ecc71;
+  --accent-blue: #3498db;
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #1a1a1a;
+  font-family: var(--font-family);
+  color: var(--text-light);
+}
+
+#game-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+#game-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------
+   載入畫面（Loading Screen）
+------------------------------------------------------------ */
+#loading-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at center, #2c3e50 0%, #11141a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity 0.4s ease;
+}
+
+.loading-box {
+  text-align: center;
+  max-width: 480px;
+  width: 85%;
+}
+
+.loading-title {
+  font-size: 2.8rem;
+  letter-spacing: 4px;
+  color: var(--primary-color);
+  text-shadow: 0 4px 15px rgba(241, 196, 15, 0.4);
+  margin-bottom: 1.5rem;
+}
+
+#loading-progress-text {
+  font-size: 1.1rem;
+  color: var(--text-light);
+  margin-bottom: 0.8rem;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  margin-bottom: 1rem;
+}
+
+.progress-bar-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #f39c12, #f1c40f);
+  border-radius: 8px;
+  transition: width 0.15s ease-out;
+}
+
+.loading-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------
+   HUD 介面容器與通用 Screen
+------------------------------------------------------------ */
+#hud-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.label-renderer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.hud-root {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------
+   大廳層（Lobby Screen）
+------------------------------------------------------------ */
+.lobby-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 18, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.lobby-card {
+  background: var(--bg-dark);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  padding: 2.2rem 3rem;
+  width: 580px;
+  max-width: 90%;
+  text-align: center;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+}
+
+.game-title {
+  font-size: 2.5rem;
+  font-weight: 900;
+  color: var(--primary-color);
+  letter-spacing: 3px;
+  margin-bottom: 1.2rem;
+  text-shadow: 0 4px 20px rgba(241, 196, 15, 0.35);
+}
+
+.room-info-box {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.room-code-label {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  letter-spacing: 1px;
+}
+
+.room-code-value {
+  font-size: 3rem;
+  font-weight: bold;
+  letter-spacing: 6px;
+  color: #fff;
+  margin: 0.2rem 0;
+}
+
+.room-status-note {
+  font-size: 0.9rem;
+  color: #bdc3c7;
+}
+
+.room-qr-box {
+  margin: 0.8rem auto;
+  width: 130px;
+  height: 130px;
+  background: white;
+  padding: 6px;
+  border-radius: 8px;
+}
+
+.room-qr-box svg {
+  width: 100%;
+  height: 100%;
+}
+
+.room-message {
+  font-size: 0.95rem;
+  color: var(--accent-red);
+  margin-top: 0.4rem;
+  font-weight: bold;
+}
+
+.slots-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.8rem;
+  margin-bottom: 1.5rem;
+}
+
+.player-slot {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.player-slot.ai-fallback {
+  opacity: 0.65;
+}
+
+.slot-color-tag {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: #fff;
+  font-weight: bold;
+}
+
+.lobby-controls-help {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.start-hint {
+  margin-top: 0.8rem;
+  font-size: 1.25rem;
+  font-weight: bold;
+  color: var(--primary-color);
+}
+
+/* ------------------------------------------------------------
+   倒數大字浮層（Countdown Overlay）
+------------------------------------------------------------ */
+.countdown-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9rem;
+  font-weight: 900;
+  color: var(--primary-color);
+  text-shadow: 0 0 40px rgba(241, 196, 15, 0.8), 0 10px 20px rgba(0, 0, 0, 0.8);
+  animation: pulse-countdown 0.9s infinite alternate;
+}
+
+@keyframes pulse-countdown {
+  0% { transform: scale(0.95); opacity: 0.9; }
+  100% { transform: scale(1.1); opacity: 1; }
+}
+
+/* ------------------------------------------------------------
+   比賽中 HUD（Racing HUD）
+------------------------------------------------------------ */
+.race-timer {
+  position: absolute;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-dark);
+  padding: 0.5rem 1.8rem;
+  border-radius: 24px;
+  font-size: 1.8rem;
+  font-weight: 800;
+  letter-spacing: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+}
+
+/* 四角玩家卡片 */
+.player-card {
+  position: absolute;
+  width: 210px;
+  background: var(--card-bg);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+
+.player-card.top-left { top: 1.5rem; left: 1.5rem; }
+.player-card.top-right { top: 1.5rem; right: 1.5rem; }
+.player-card.bottom-left { bottom: 1.5rem; left: 1.5rem; }
+.player-card.bottom-right { bottom: 1.5rem; right: 1.5rem; }
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 0.3rem;
+}
+
+.card-pos {
+  color: var(--primary-color);
+  font-size: 1.3rem;
+}
+
+.card-body {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-lap {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+}
+
+.card-item-slot {
+  width: 44px;
+  height: 44px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+}
+
+.card-item-icon.rolling {
+  animation: roll-item 0.15s infinite;
+}
+
+@keyframes roll-item {
+  0% { transform: scale(0.9); }
+  50% { transform: scale(1.15); }
+  100% { transform: scale(0.9); }
+}
+
+/* 底部中央小地圖 */
+.minimap-canvas {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+
+/* ------------------------------------------------------------
+   結算層（Results Screen）
+------------------------------------------------------------ */
+.results-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 18, 0.65);
+  backdrop-filter: blur(6px);
+}
+
+.results-card {
+  background: var(--bg-dark);
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 16px;
+  padding: 2.5rem 3.5rem;
+  width: 650px;
+  max-width: 90%;
+  text-align: center;
+  box-shadow: 0 15px 40px rgba(0, 0, 0, 0.7);
+}
+
+.results-card h2 {
+  font-size: 2.4rem;
+  color: var(--primary-color);
+  margin-bottom: 1.5rem;
+  letter-spacing: 2px;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.8rem;
+}
+
+.results-table th, .results-table td {
+  padding: 0.85rem 1rem;
+  text-align: center;
+  font-size: 1.1rem;
+}
+
+.results-table th {
+  color: var(--text-muted);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.results-table tbody tr {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.results-countdown {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------------
+   3D 車頂浮動姓名標籤（CSS2DObject）
+------------------------------------------------------------ */
+.car-3d-label {
+  background: rgba(20, 24, 34, 0.82);
+  color: #fff;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: bold;
+  border: 2px solid #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -100%);
+}

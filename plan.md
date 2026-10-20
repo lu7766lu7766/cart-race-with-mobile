@@ -9,8 +9,8 @@
 
 | 階段 | 內容 | 誰來做 |
 |---|---|---|
-| 第一階段 | 瀏覽器開啟就能玩的 3D 卡丁車道具競速。鍵盤操作（方向鍵 / WASD，同一台電腦最多 2 人），AI 電腦車補到 4 台。已內建大廳、房號區、輸入抽象層，為第二階段先鋪好路。 | 老師（本專案直接完成） |
-| 第二階段 | 大螢幕顯示**房間號碼**與 QR Code，手機輸入房號後透過 **WebSocket** 加入。手機橫拿當方向盤，用**陀螺儀/重力感測**左右傾斜轉向；**右側**按鈕加速、**左側**按鈕倒退、**中央**按鈕放道具。 | 學生（貼上提示詞讓 AI 完成）＋老師的參考解答 |
+| 第一階段（`main` 分支） | 瀏覽器開啟就能玩的 3D 卡丁車道具競速。鍵盤操作（方向鍵 / WASD，同一台電腦最多 2 人），AI 電腦車補到 4 台。已內建大廳、房號區、輸入抽象層與自動化測試，為第二階段先鋪好路。 | 老師（本專案直接完成，發給學生的起始專案） |
+| 第二階段（`phase2` 分支） | 大螢幕顯示**房間號碼**與 QR Code，手機輸入房號後透過 **WebSocket** 加入。手機橫拿當方向盤，用**陀螺儀/重力感測**左右傾斜轉向；**右側**按鈕加速、**左側**按鈕倒退、**中央**按鈕放道具。 | 學生（貼上提示詞讓 AI 完成）＋老師的參考解答分支 |
 
 ---
 
@@ -37,13 +37,13 @@
 | 道具 | ⚡ 加速氮氣、🍌 香蕉皮、🚀 導彈、🛡️ 護盾（另有固定加速板） |
 | 人數 | 一場最多 **4** 台車，空位由 AI 補上 |
 | 美術 | **Kenney 免費 3D 模型**（CC0）：Car Kit 卡丁車 4 款、Racing Kit 場景道具。賽道路面用程式生成 |
-| 第一階段預先內建 | 同鍵盤雙人（方向鍵＋WASD）、AI 電腦車、**輸入抽象層**、大廳畫面＋房號顯示區 |
-| 執行環境 | 教室電腦安裝 Node.js；第一階段就用 `npm install` → `npm start` |
+| 第一階段預先內建 | 同鍵盤雙人（方向鍵＋WASD）、AI 電腦車、**輸入抽象層**、大廳畫面＋房號顯示區、自動化測試（`tests/`） |
+| 執行環境 | 教室電腦安裝 Node.js（≥ 18）；第一階段就用 `npm install` → `npm start` |
 | 第二階段部署 | **教室區網**：老師電腦執行伺服器，手機連同一個 Wi-Fi；用自簽憑證提供 HTTPS（手機感測器必須在 HTTPS 下才能使用） |
 | 手機道具鍵 | 手機橫拿時**畫面中央**的圓形按鈕，顯示目前持有的道具；被擊中時手機震動 |
 | 學生工具 | Claude Code / Cursor 等能直接讀寫專案檔案的 AI 工具 |
 | 學生程度 | 初學者 → 程式碼加大量中文註解；每個提示詞附「怎麼確認成功」 |
-| 參考解答 | 老師端照提示詞實作一次第二階段並實測，放在 `phase2-solution/` |
+| 分支策略 | 參考解答位於 `phase2` 分支，學生可直接 switch 體驗完整成品；兩分支共用 `game/` 目錄 |
 
 ---
 
@@ -65,34 +65,39 @@
 ### 資料夾結構
 
 ```
-driver/
+cart-race-with-mobile/
 ├─ plan.md                    ← 本文件
-├─ phase1/                    ← 第一階段（發給學生的起始專案）
-│  ├─ package.json            ← 依賴：three@0.186.1（已建立）
-│  ├─ server.js               ← 靜態檔案伺服器，零額外依賴（已建立）
-│  └─ public/
-│     ├─ index.html           ← 大螢幕遊戲頁（import map 指向 /lib/three/）
-│     ├─ css/style.css
-│     ├─ models/              ← Kenney 模型＋授權檔（已放好）
-│     │  ├─ karts/kart-oobi|oodi|ooli|oopi.glb + Textures/colormap.png
-│     │  └─ props/ treeLarge, treeSmall, grandStand, grandStandCovered, overheadLights,
-│     │            barrierRed, barrierWhite, flagCheckers, flagRed, flagGreen, tent,
-│     │            lightPostModern, billboard, pylon, cone
-│     └─ js/
-│        ├─ main.js           ← 啟動、遊戲迴圈、狀態機、對外 API（game.addPlayer…）
-│        ├─ config.js         ← 所有可調參數（圈數、速度、按鍵、顏色…）
-│        ├─ utils.js          ← clamp/lerp/角度差、小型事件系統 Emitter
-│        ├─ assets.js         ← GLB 載入（失敗時用方塊代替，不會整個壞掉）
-│        ├─ track.js          ← 賽道生成、位置投影、牆壁、裝飾
-│        ├─ car.js            ← 車輛物理與模型（輪子轉動、轉向、打滑、跳起）
-│        ├─ input.js          ← 輸入抽象層：KeyboardInput
-│        ├─ ai.js             ← AIInput（AI 也是一種輸入來源）
-│        ├─ items.js          ← 道具箱、道具效果、香蕉、導彈、加速板
-│        ├─ camera.js         ← 共用追蹤鏡頭
-│        ├─ hud.js            ← 大廳、玩家卡片、倒數、結算、小地圖、車名標籤
-│        ├─ audio.js          ← WebAudio 合成音效（不需音檔）
-│        └─ network.js        ← 空殼：export function initNetwork(game) {}（第二階段實作）
-└─ phase2-solution/           ← 參考解答（phase1 套用第 7 節提示詞後的結果）
+├─ README.md                  ← 學生指引（含分支切換說明）
+└─ game/                      ← 遊戲主專案（main 分支為第一階段，phase2 分支為第二階段完成版）
+   ├─ package.json            ← 依賴：three@0.186.1、測試腳本
+   ├─ server.js               ← 靜態檔案伺服器，零額外依賴
+   ├─ tests/                  ← 自動化測試（npm test）
+   │  ├─ utils.test.js
+   │  ├─ track.test.js
+   │  └─ race.test.js
+   └─ public/
+      ├─ index.html           ← 大螢幕遊戲頁（import map 指向 /lib/three/）
+      ├─ css/style.css
+      ├─ models/              ← Kenney 模型＋授權檔（已放好）
+      │  ├─ karts/kart-oobi|oodi|ooli|oopi.glb + Textures/colormap.png
+      │  └─ props/ treeLarge, treeSmall, grandStand, grandStandCovered, overheadLights,
+      │            barrierRed, barrierWhite, flagCheckers, flagRed, flagGreen, tent,
+      │            lightPostModern, billboard, pylon, cone
+      └─ js/
+         ├─ main.js           ← 啟動、渲染迴圈、事件掛載、window.game
+         ├─ game.js           ← 遊戲核心邏輯、狀態機、固定步長模擬、對外 API
+         ├─ config.js         ← 所有可調參數（圈數、速度、按鍵、顏色…）
+         ├─ utils.js          ← clamp/lerp/角度差、mulberry32、事件系統 Emitter
+         ├─ assets.js         ← GLB 載入（失敗時用方塊代替，不會整個壞掉）
+         ├─ track.js          ← 賽道生成、位置投影、牆壁、裝飾
+         ├─ car.js            ← 車輛物理與模型（輪子轉動、轉向、打滑、跳起）
+         ├─ input.js          ← 輸入抽象層：KeyboardInput、NullInput
+         ├─ ai.js             ← AIInput（AI 也是一種輸入來源）
+         ├─ items.js          ← 道具箱、道具效果、香蕉、導彈、加速板
+         ├─ camera.js         ← 共用追蹤鏡頭
+         ├─ hud.js            ← 大廳、玩家卡片、倒數、結算、小地圖、車名標籤
+         ├─ audio.js          ← WebAudio 合成音效（不需音檔）
+         └─ network.js        ← 空殼：export function initNetwork(game) {}（第二階段實作）
 ```
 
 ---
@@ -112,7 +117,7 @@ driver/
 大廳：按 Enter 開始（沒人加入時 P1 自動加入），空位由 AI 補滿 4 台；比賽中按 Esc 回大廳。
 
 ### 5.3 賽道（`track.js`）
-- 13 個控制點組成封閉的 `CatmullRomCurve3`，約 280×150 單位，總長約 900 單位；平均取樣 N≈600 點，存位置、切線、累積距離。
+- 13 個控制點組成封閉的 `CatmullRomCurve3`，約 280×150 單位，總長約 850～950 單位；平均取樣 N=600 點，存位置、切線、累積距離。
 - 路面寬 16、兩側各 4 單位草地（減速 50%），外側為紅白條紋矮牆（硬牆，撞到時被推回並減速）。
 - 起終點格紋線、路面中線、紅白路肩：用程式生成 mesh＋canvas 貼圖。
 - Kenney 裝飾：起點門架（overheadLights）、看台、帳篷、旗子、路燈、樹（避開賽道隨機擺放）。
@@ -164,10 +169,13 @@ driver/
 input.getState() → { steer, throttle, brake, useItem }
 
 window.game = game;                             // 方便在瀏覽器 Console 除錯
+game.state                                      // 'loading'|'lobby'|'countdown'|'racing'|'results'
 game.addPlayer({ name, kind: 'remote', input }) // → player，或 null（4 位真人已滿）
-                                                //   比賽中加入的人會在下一場上場
+                                                //   lobby 時加入：開賽就上場；比賽中加入：下一場上場（player.inRace=false）
 game.removePlayer(playerId)                     // 比賽中離開：該車改由 AI 接手
-game.setRoomInfo({ code, url, qrSvg })          // 大廳顯示房號、網址與 QR Code
+game.getPlayers()                               // 取得真人玩家陣列（依 slot 排序）
+game.getStatus(playerId)                        // → { item, position, lap, totalLaps, color, state, inRace } 或 null
+game.setRoomInfo({ code, url, qrSvg, message }) // 大廳顯示房號、網址、QR Code 與狀態訊息（message）
 game.on('itemChanged', ({ player, item }) => …) // item: 'nitro'|'banana'|'missile'|'shield'|null
 game.on('playerHit',  ({ player, by }) => …)    // 給手機震動用
 game.on('lapChanged', ({ player, lap }) => …)
@@ -182,14 +190,14 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 1. ✅ 下載 Kenney Car Kit／Racing Kit，挑選模型放進 `public/models/`（含 CC0 授權檔）
 2. ✅ `package.json`、`server.js`（零依賴靜態伺服器，`/lib/three/` 對應 `node_modules/three`）
-3. ⬜ `index.html`＋import map、`style.css`、`config.js`、`utils.js`、`assets.js`
-4. ⬜ `track.js`（路面、牆、投影、裝飾）
-5. ⬜ `car.js`＋`input.js`（先讓一台車能開）
-6. ⬜ `camera.js`、`hud.js`（大廳/倒數/比賽/結算）、狀態機（`main.js`）
-7. ⬜ `ai.js`、圈數與名次
-8. ⬜ `items.js`、`audio.js`
-9. ⬜ `network.js` 空殼、事件系統、手感調整
-10. ⬜ 用瀏覽器實際遊玩驗收（見第 9 節）
+3. ✅ `index.html`＋import map、`style.css`、`config.js`、`utils.js`、`assets.js`
+4. ✅ `track.js`（路面、牆、投影、裝飾）
+5. ✅ `car.js`＋`input.js`（先讓一台車能開）
+6. ✅ `camera.js`、`hud.js`（大廳/倒數/比賽/結算）、狀態機與遊戲核心（`game.js`、`main.js`）
+7. ✅ `ai.js`、圈數與名次
+8. ✅ `items.js`、`audio.js`
+9. ✅ `network.js` 空殼、事件系統、手感調整
+10. ✅ 自動化測試（`tests/*.test.js`）與瀏覽器實際遊玩驗收（見第 9 節）
 
 ---
 
@@ -212,7 +220,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 | 伺服器→手機 | `{type:'joined', playerId}` 或 `{type:'error', message}` | 房號錯誤、房間已滿（4 人）等 |
 | 伺服器→大螢幕 | `{type:'playerJoined', playerId, name}` / `{type:'playerLeft', playerId}` | |
 | 手機→伺服器→大螢幕 | `{type:'input', steer, throttle, brake, item}`（大螢幕收到時多一個 `playerId`） | 每秒 30 次；`item` 為累加計數器，大螢幕比對數字增加時才觸發一次道具，封包遺失也不會重複觸發 |
-| 大螢幕→伺服器→手機 | `{type:'toPlayer', playerId, data}` → 手機收到 `data` | `data`：`{type:'status', item, position, lap, color, state}`、`{type:'vibrate', ms}` |
+| 大螢幕→伺服器→手機 | `{type:'toPlayer', playerId, data}` → 手機收到 `data` | `data`：`{type:'status', item, position, lap, totalLaps, color, state, inRace}`、`{type:'vibrate', ms}` |
 | 伺服器→手機 | `{type:'roomClosed'}` | 大螢幕關閉或重新整理 |
 
 ### 6.3 大螢幕（`network.js`）
@@ -233,13 +241,13 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 ## 7. 學生用提示詞（第二階段）
 
-> 使用方式：用 Claude Code 或 Cursor 開啟 `phase1` 資料夾，**依序**貼上提示詞 1 → 4，每一步都照「確認成功」做檢查，成功後再進行下一步。出錯時貼上「提示詞 Ⓐ 除錯」。
+> 使用方式：用 Claude Code 或 Cursor 開啟 `game` 資料夾，**依序**貼上提示詞 1 → 4，每一步都照「確認成功」做檢查，成功後再進行下一步。出錯時貼上「提示詞 Ⓐ 除錯」。
 
 ### 提示詞 1：伺服器加入 WebSocket 房間與 HTTPS
 
 ```
 你是我的程式老師，我是初學者。這是一個用 Three.js 寫的網頁賽車遊戲專案（第一階段已完成，可用鍵盤玩）。
-請先閱讀 server.js、public/js/main.js、public/js/network.js 了解專案，然後修改 server.js，加入手機多人連線需要的伺服器功能：
+請先閱讀 server.js、public/js/game.js、public/js/network.js 了解專案，然後修改 server.js，加入手機多人連線需要的伺服器功能：
 
 1. 安裝並使用套件：ws（WebSocket）、selfsigned（自簽憑證）、qrcode（產生 QR Code），更新 package.json。
 2. 保留原本 HTTP 3000 埠；另外開 HTTPS 3443 埠，用 selfsigned 產生憑證並存到 cert/ 資料夾，下次啟動直接讀取。兩個埠提供相同的網頁，也都在路徑 /ws 接受 WebSocket 連線（共用同一套處理程式）。
@@ -247,11 +255,12 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 4. 房間功能，訊息一律是 JSON：
    - 大螢幕送 {type:'host'} → 建立 4 位數字不重複的房號，回 {type:'roomCreated', code}
    - 手機送 {type:'join', code, name} → 成功回 {type:'joined', playerId}，並通知大螢幕 {type:'playerJoined', playerId, name}；房號不存在或已有 4 位手機玩家就回 {type:'error', message:'中文錯誤訊息'}
-   - 手機送 {type:'input', steer, throttle, brake, item} → 加上 playerId 轉給該房間的大螢幕
-   - 大螢幕送 {type:'toPlayer', playerId, data} → 把 data 原封不動轉給那支手機
+   - 手機送 {type:'input', steer, throttle, brake, item} → 伺服器端將數值 clamp 到合法範圍後，加上 playerId 轉給該房間的大螢幕
+   - 大螢幕送 {type:'toPlayer', playerId, data} → 把 data 原封不動轉給那支手機（限制同一房間）
    - 手機斷線 → 通知大螢幕 {type:'playerLeft', playerId}；大螢幕斷線 → 通知所有手機 {type:'roomClosed'} 並刪除房間
    - 收到格式錯誤的訊息要忽略，不能讓伺服器當掉
-5. 啟動時在終端機用中文印出：大螢幕網址 http://localhost:3000 與手機網址 https://<區網IP>:3443/controller.html。
+5. 加入 WebSocket 心跳機制：每 15 秒 ping，逾期未回應就斷線，處理手機休眠半開連線；伺服器關閉時清掉定時器。
+6. 啟動時在終端機用中文印出：大螢幕網址 http://localhost:3000 與手機網址 https://<區網IP>:3443/controller.html。
 
 請在程式裡加詳細的中文註解。完成後告訴我要執行哪些指令，以及怎麼確認成功。
 ```
@@ -261,7 +270,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 ### 提示詞 2：大螢幕顯示房號並接收手機玩家
 
 ```
-接續上一步。請閱讀 public/js/main.js、input.js、hud.js 了解遊戲對外提供的 API（game.addPlayer、game.removePlayer、game.setRoomInfo、game.on 事件），以及輸入來源的介面 getState() → { steer, throttle, brake, useItem }。
+接續上一步。請閱讀 public/js/game.js、input.js、hud.js 了解遊戲對外提供的 API（game.addPlayer、game.removePlayer、game.getStatus、game.setRoomInfo、game.state、game.on 事件），以及輸入來源的介面 getState() → { steer, throttle, brake, useItem }。
 現在請實作 public/js/network.js 裡的 initNetwork(game)：
 
 1. 依照目前網頁的通訊協定連線 WebSocket（http 用 ws://、https 用 wss://，路徑 /ws），連上後送 {type:'host'}。
@@ -270,11 +279,15 @@ game.on('playerFinished', ({ player, rank, time }) => …)
    - 收到 {type:'input', playerId, steer, throttle, brake, item} 時更新對應玩家的輸入
    - item 是手機端的累加計數器，數字比上次大時，下一次 getState() 回傳 useItem:true（只出現一次）
    - 超過 500 毫秒沒收到輸入就把 steer/throttle/brake 歸零（避免斷線時車子一直衝）
-4. 收到 playerJoined → game.addPlayer({ name, kind:'remote', input: new RemoteInput() })，用 Map 記住 playerId 與 player；如果 addPlayer 回傳 null，就送 toPlayer 錯誤訊息給手機。收到 playerLeft → game.removePlayer。
-5. 用 game.on 訂閱 itemChanged、positionChanged、lapChanged、stateChanged、playerHit，透過 {type:'toPlayer', playerId, data} 傳給對應手機：
-   - data = {type:'status', item, position, lap, totalLaps, color, state}（任何一項改變就送完整狀態）
-   - 被擊中時另外送 data = {type:'vibrate', ms:300}
-6. WebSocket 斷線時，大廳顯示「連線中斷，重新連線中…」，每 2 秒自動重連並重新建立房間。
+4. 收到 playerJoined → game.addPlayer({ name, kind:'remote', input: new RemoteInput() })，用 Map<serverPlayerId, gamePlayer> 記住對應關係。
+   - 加入成功後立刻送一次 status 給該手機：{type:'toPlayer', playerId, data: {type:'status', ...game.getStatus(player.id)}}
+   - 如果 addPlayer 回傳 null（已滿額），就送 toPlayer 錯誤訊息給手機：{type:'toPlayer', playerId, data: {type:'error', message:'房間已滿（4 位真人）'}}
+   - 收到 playerLeft → game.removePlayer(gamePlayer.id)
+5. 用 game.on 訂閱事件傳送給手機：
+   - itemChanged、positionChanged、lapChanged：只傳給該玩家 {type:'toPlayer', playerId, data: {type:'status', ...game.getStatus(player.id)}}
+   - stateChanged：對所有已連線的手機廣播目前狀態 {type:'status', ...game.getStatus(p.id)}
+   - playerHit：另外送 {type:'toPlayer', playerId, data: {type:'vibrate', ms:300}}
+6. WebSocket 斷線時：對所有遠端玩家呼叫 game.removePlayer 並清空 Map，大廳顯示「連線中斷，重新連線中…」（呼叫 game.setRoomInfo({ code: null, message: '連線中斷，重新連線中…' })），每 2 秒自動重連並重新建立房間。
 
 不要修改遊戲物理與畫面邏輯，只改 network.js（必要時可以小幅修改 hud.js 的顯示）。請加詳細中文註解，完成後告訴我怎麼確認成功。
 ```
@@ -288,8 +301,9 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 畫面一「加入房間」：
 - 房號輸入框（4 位數字，使用數字鍵盤）、暱稱輸入框（最多 8 字，記在 localStorage）、「開始」大按鈕。
-- 按下「開始」時（一定要在點擊事件裡）：iOS 需要呼叫 DeviceMotionEvent.requestPermission() 與 DeviceOrientationEvent.requestPermission() 取得感測器權限；並嘗試進入全螢幕、鎖定橫向、使用 Wake Lock 讓螢幕不會變暗。
+- 按下「開始」時（一定要在點擊事件裡第一步執行）：先呼叫 DeviceMotionEvent.requestPermission() 與 DeviceOrientationEvent.requestPermission() 取得感測器權限（iOS）；之後嘗試進入全螢幕、鎖定橫向、使用 Wake Lock 讓螢幕不會變暗（各自包 try/catch，失敗不影響加入）。
 - 如果 window.isSecureContext 是 false，顯示中文提示：必須用 https 網址開啟。
+- 加入後任何時候收到 error，都要停止發送 input、關閉 WebSocket、回到畫面一並顯示錯誤訊息。
 
 畫面二「方向盤」（手機橫拿）：
 - 左半邊：大按鈕「倒退」（按住時 brake=1）
@@ -297,6 +311,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 - 正中央：圓形道具按鈕，顯示目前道具（nitro⚡ banana🍌 missile🚀 shield🛡️，沒有就顯示灰色），按一下讓 item 計數器 +1
 - 上方：名次與圈數；背景使用伺服器傳來的玩家顏色；顯示一個會跟著傾斜旋轉的方向盤圖示
 - 小按鈕「校正」（把目前角度設為正中）與「反轉方向」
+- 若收到 status.inRace === false 且 status.state !== 'lobby'，在方向盤畫面上方蓋上「比賽進行中，下一場再上場」提示。
 - 手機直拿時蓋上「請把手機轉成橫向」
 - 用 touchstart/touchend/touchcancel 並 preventDefault，支援多指同時按，禁止縮放、捲動、長按選字
 
@@ -308,7 +323,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 其他：
 - 收到 vibrate 時呼叫 navigator.vibrate(ms)；不支援震動（iPhone）時讓畫面閃紅色
 - 斷線或收到 roomClosed 時回到畫面一並顯示原因
-- 介面文字全部用繁體中文，按鈕要大、適合大拇指
+- 介面文字全部用繁體中文，按鈕要大、適合大拇指，不使用 Three.js
 
 請加詳細中文註解，完成後告訴我手機要怎麼測試。
 ```
@@ -343,12 +358,12 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 ---
 
-## 8. 參考解答與驗證流程（老師端）
+## 8. 參考解答與驗證流程（老師端分支管理）
 
-1. 完成 `phase1/` 並通過第 9 節第一階段驗收。
-2. 複製 `phase1/` → `phase2-solution/`，**照第 7 節提示詞逐字**依序執行（模擬學生操作），記錄 AI 卡住或誤解的地方，回頭修改提示詞的措辭。
-3. 實機測試：Android Chrome、iPhone Safari 各一支，確認權限流程、轉向方向、多指觸控與震動。
-4. 修改後的提示詞回寫本文件第 7 節。
+1. 在 `main` 分支完成第一階段並通過第 9 節第一階段驗收後，打 tag `phase1-v1`。
+2. 從 `main` 分支建立並切換至 `phase2` 分支製作參考解答：`git checkout -b phase2`。
+3. 驗證提示詞：從 `main` 開拋棄式分支 `prompt-test`，**逐字**貼第 7 節提示詞 1~4 模擬學生操作，記錄 AI 卡住或誤解之處並反饋修正提示詞，最後與 `phase2` 比對。
+4. 之後若 `main` 主分支修復 bug，執行 `git switch phase2 && git merge main`，讓第二階段完成版也能拿到核心邏輯修正。
 
 ---
 
@@ -390,8 +405,10 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 ## 11. 目前進度
 
 - ✅ 引擎選型：Three.js 0.186.1
-- ✅ Kenney Car Kit 3.1／Racing Kit 素材已下載並挑選到 `phase1/public/models/`（CC0 授權檔一併附上）
-- ✅ `phase1/package.json`、`phase1/server.js`
-- ✅ `phase1/public/js/config.js`、`phase1/public/js/utils.js`
-- ⬜ 第一階段其餘程式（第 5.10 節第 3～10 項；`index.html`、`style.css`、`assets.js` 起尚未撰寫）
-- ⬜ 第二階段參考解答與提示詞實測（第 8 節）
+- ✅ Kenney Car Kit 3.1／Racing Kit 素材已下載並挑選到 `game/public/models/`（CC0 授權檔一併附上）
+- ✅ `game/package.json`、`game/server.js`（含安全修復與測試匯出）
+- ✅ `game/public/js/config.js`、`game/public/js/utils.js`（含 mulberry32 與時間修復）
+- ✅ 第一階段核心程式與前端渲染全數完成（`index.html`、`style.css`、`track.js`、`car.js`、`input.js`、`ai.js`、`items.js`、`game.js`、`assets.js`、`camera.js`、`hud.js`、`audio.js`、`network.js`、`main.js`）
+- ✅ 第一階段自動化測試（`game/tests/utils.test.js`、`track.test.js`、`race.test.js`）
+- ✅ 根目錄 `README.md` 與 `plan.md` 計畫書更新
+- ⬜ 第二階段參考解答與提示詞實測（`phase2` 分支）

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>🏁 3D 道具賽車遊戲 - Kart Racer</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+
+  <!-- 原生 ES Modules Import Map 配置 -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/lib/three/build/three.module.js",
+      "three/addons/": "/lib/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- 3D 畫布與 HUD 容器 -->
+  <div id="game-container"></div>
+  <div id="hud-container"></div>
+
+  <!-- 開啟遊戲時的素材載入過渡畫面 -->
+  <div id="loading-screen">
+    <div class="loading-box">
+      <h1 class="loading-title">🏁 KART RACER</h1>
+      <p id="loading-progress-text">準備載入 3D 模型素材...</p>
+      <div class="progress-bar-bg">
+        <div id="loading-progress-bar" class="progress-bar-fill"></div>
+      </div>
+      <p class="loading-sub">使用 Three.js 與 Kenney CC0 免費素材建置</p>
+    </div>
+  </div>
+
+  <!-- 主程式進入點 -->
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
