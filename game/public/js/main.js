@@ -1,15 +1,16 @@
 // ============================================================
 //  main.js — 遊戲主程式啟動與主迴圈
-//  負責初始化 Three.js 場景、燈光、陰影與相機，
-//  驅動資產載入進度、建立遊戲核心 Game 實例、掛載 HUD 與 WebAudio 音效、
-//  監聽大廳鍵盤加入控制，並以 requestAnimationFrame 驅動畫面渲染與邏輯步長。
+//  負責初始化 Three.js 場景、固定範圍全局日光陰影相機、
+//  陸行鳥大賽車風格分割畫面追尾相機（ChaseCamera）與全場相機（OverviewCamera）、
+//  資產載入進度、建立遊戲核心 Game 實例、掛載 HUD 與 WebAudio 音效，
+//  並以 requestAnimationFrame 驅動畫面渲染（setScissorTest / setViewport / setScissor）。
 // ============================================================
 
 import * as THREE from 'three';
 import { CONFIG, KEYBOARD_LAYOUTS } from './config.js';
 import { Game } from './game.js';
 import { AssetManager } from './assets.js';
-import { RaceCamera } from './camera.js';
+import { ChaseCamera, OverviewCamera, getViewportRects } from './camera.js';
 import { HUD } from './hud.js';
 import { SoundSystem } from './audio.js';
 import { KeyboardInput } from './input.js';
@@ -21,43 +22,61 @@ async function bootstrap() {
   const progressBar = document.getElementById('loading-progress-bar');
   const progressText = document.getElementById('loading-progress-text');
 
-  // 1. 初始化 Three.js 渲染器
+  // 1. 初始化 Three.js 渲染器（6.7 效能優化：pixelRatio 上限 1.5，手動控制陰影更新）
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: 'high-performance',
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
   container.appendChild(renderer.domElement);
 
   // 2. 初始化 3D 場景與天空背景
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x87ceeb); // 天空淺藍
-  scene.fog = new THREE.FogExp2(0x87ceeb, 0.0025);
+  scene.background = new THREE.Color(0x87ceeb);
+  const defaultFog = new THREE.FogExp2(0x87ceeb, 0.0022);
+  scene.fog = defaultFog;
 
-  // 3. 建立燈光系統（一盞開陰影的 DirectionalLight 日光 + 環境光）
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.65);
   scene.add(ambientLight);
 
+  // 3. 建立日光陰影系統（6.1: 固定框住整條賽道包圍盒，貼圖 4096）
   const sunLight = new THREE.DirectionalLight(0xffffff, 1.25);
-  sunLight.position.set(60, 100, 40);
   sunLight.castShadow = true;
-  sunLight.shadow.mapSize.width = 2048;
-  sunLight.shadow.mapSize.height = 2048;
-  sunLight.shadow.camera.near = 10;
-  sunLight.shadow.camera.far = 320;
-  sunLight.shadow.camera.left = -120;
-  sunLight.shadow.camera.right = 120;
-  sunLight.shadow.camera.top = 120;
-  sunLight.shadow.camera.bottom = -120;
+  sunLight.shadow.mapSize.width = 4096;
+  sunLight.shadow.mapSize.height = 4096;
   scene.add(sunLight);
   scene.add(sunLight.target);
 
-  // 4. 建立相機與智慧共用追蹤器
-  const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 1000);
-  const raceCamera = new RaceCamera(camera, sunLight);
+  // 4. 初始化遊戲核心
+  const game = new Game();
+  window.game = game;
+
+  // 依賽道包圍盒配置陰影相機
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const p of game.track.points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.z < minZ) minZ = p.z;
+    if (p.z > maxZ) maxZ = p.z;
+  }
+  const midX = (minX + maxX) / 2;
+  const midZ = (minZ + maxZ) / 2;
+  const span = Math.max((maxX - minX) / 2, (maxZ - minZ) / 2) + 25;
+
+  sunLight.position.set(midX + 60, 240, midZ + 60);
+  sunLight.target.position.set(midX, 0, midZ);
+  sunLight.target.updateMatrixWorld();
+  sunLight.shadow.camera.left = -span;
+  sunLight.shadow.camera.right = span;
+  sunLight.shadow.camera.top = span;
+  sunLight.shadow.camera.bottom = -span;
+  sunLight.shadow.camera.near = 20;
+  sunLight.shadow.camera.far = 500;
+  sunLight.shadow.camera.updateProjectionMatrix();
 
   // 5. 載入 3D 模型素材
   const assets = new AssetManager();
@@ -67,7 +86,6 @@ async function bootstrap() {
     if (progressText) progressText.textContent = `載入素材中... ${pct}%`;
   });
 
-  // 隱藏載入畫面
   if (loadingScreen) {
     loadingScreen.style.opacity = '0';
     setTimeout(() => {
@@ -75,33 +93,35 @@ async function bootstrap() {
     }, 400);
   }
 
-  // 6. 初始化遊戲核心
-  const game = new Game();
-  window.game = game; // 供控制台除錯檢測
-
-  // 建立賽道路面與裝飾網格
+  // 建立賽道路面、跳台與裝飾網格
   game.track.buildMeshes(scene, assets);
   game.itemSystem.attachView(scene, assets);
+
+  // 6. 建立追尾鏡頭群與全場相機
+  const chaseCameras = [
+    new ChaseCamera(0, game.track),
+    new ChaseCamera(1, game.track),
+    new ChaseCamera(2, game.track),
+    new ChaseCamera(3, game.track),
+  ];
+  const overviewCamera = new OverviewCamera(game.track);
 
   // 7. 初始化 HUD 介面與音效系統
   const hudContainer = document.getElementById('hud-container') || container;
   const hud = new HUD(hudContainer, game);
   const audio = new SoundSystem();
 
-  // 串接音效通知
   game.on('sound', (type) => audio.play(type));
 
   // 8. 狀態切換時動態掛載/卸載車輛 3D 視覺
   game.on('stateChanged', ({ state }) => {
     if (state === 'countdown') {
-      // 開賽倒數：為所有參賽車建立 3D 視覺
       for (const racer of game.racers) {
         if (racer.car) {
           racer.car.attachView(scene, assets, racer.color);
         }
       }
     } else if (state === 'lobby') {
-      // 返回大廳：清除所有賽車 3D 模型與標籤
       for (const racer of game.racers) {
         if (racer.car) {
           racer.car.detachView();
@@ -112,14 +132,13 @@ async function bootstrap() {
   });
 
   // 9. 鍵盤加入/退出與按鍵監聽
-  const keyboardPlayers = new Map(); // layoutId -> player
+  const keyboardPlayers = new Map();
 
   window.addEventListener('keydown', (e) => {
     const state = game.state;
 
-    // 大廳按鍵控制
     if (state === 'lobby') {
-      // 玩家 1（方向鍵配置）加入
+      // 玩家 1 加入（方向鍵配置）
       if (e.code === 'ArrowUp') {
         if (!keyboardPlayers.has('arrows')) {
           const input = new KeyboardInput(KEYBOARD_LAYOUTS[0], window);
@@ -142,7 +161,7 @@ async function bootstrap() {
         }
       }
 
-      // 玩家 2（WASD 配置）加入
+      // 玩家 2 加入（WASD 配置）
       if (e.code === 'KeyW') {
         if (!keyboardPlayers.has('wasd')) {
           const input = new KeyboardInput(KEYBOARD_LAYOUTS[1], window);
@@ -165,9 +184,8 @@ async function bootstrap() {
         }
       }
 
-      // 按 Enter 開始比賽
+      // 開始比賽
       if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-        // 若完全沒有真人加入，預設自動將玩家 1 加入
         if (game.players.size === 0) {
           const input = new KeyboardInput(KEYBOARD_LAYOUTS[0], window);
           const p = game.addPlayer({
@@ -180,12 +198,10 @@ async function bootstrap() {
         game.startRace();
       }
     } else if (state === 'racing') {
-      // 比賽中按 Esc 放棄回大廳
       if (e.code === 'Escape') {
         game.backToLobby();
       }
     } else if (state === 'results') {
-      // 結算畫面按 Enter 立即返回大廳
       if (e.code === 'Enter' || e.code === 'NumpadEnter') {
         game.backToLobby();
       }
@@ -195,15 +211,13 @@ async function bootstrap() {
   // 10. 初始化網路介面（第一階段空殼）
   initNetwork(game);
 
-  // 11. 監聽視窗尺寸改變
+  // 11. 監聽視窗縮放
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   });
 
-  // 12. requestAnimationFrame 主動畫迴圈（以 timestamp 計算真實 dt，相容 Three.js 新版規範）
+  // 12. 主動畫渲染迴圈
   let lastTimestamp = null;
 
   function animate(timestamp) {
@@ -230,16 +244,86 @@ async function bootstrap() {
     }
 
     game.itemSystem.syncView(realDt);
-    raceCamera.update(realDt, game.racers);
-    hud.update(camera);
+    hud.update();
 
-    renderer.render(scene, camera);
+    // 6.1: 陰影每幀只更新一次
+    renderer.shadowMap.needsUpdate = true;
+
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const state = game.state;
+
+    if (state === 'racing' || state === 'countdown') {
+      const viewRacers = game.viewRacers || [];
+      const humanCount = viewRacers.length;
+
+      if (humanCount === 0) {
+        // 0 人（無頭測試或除錯）：全螢幕全場俯視（算繪前暫時關閉 fog 避免被霧洗白）
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, W, H);
+        overviewCamera.camera.aspect = W / H;
+        overviewCamera.camera.updateProjectionMatrix();
+        overviewCamera.updateOverview();
+        scene.fog = null;
+        renderer.render(scene, overviewCamera.camera);
+        scene.fog = defaultFog;
+      } else {
+        // 1~4 人自動分割畫面追尾渲染
+        const rects = getViewportRects(humanCount, W, H);
+        renderer.setScissorTest(true);
+
+        for (let i = 0; i < rects.length; i++) {
+          const rect = rects[i];
+          renderer.setViewport(rect.x, rect.y, rect.w, rect.h);
+          renderer.setScissor(rect.x, rect.y, rect.w, rect.h);
+
+          if (i < humanCount) {
+            const racer = viewRacers[i];
+            const chaseCam = chaseCameras[racer.slot];
+            chaseCam.camera.aspect = rect.w / rect.h;
+            chaseCam.camera.updateProjectionMatrix();
+            chaseCam.update(realDt, racer.car);
+            scene.fog = defaultFog;
+            renderer.render(scene, chaseCam.camera);
+          } else {
+            // 3 人模式下的第 4 格：全場俯視（算繪前暫時關閉 fog 避免被霧洗白）
+            overviewCamera.camera.aspect = rect.w / rect.h;
+            overviewCamera.camera.updateProjectionMatrix();
+            overviewCamera.updateOverview();
+            scene.fog = null;
+            renderer.render(scene, overviewCamera.camera);
+            scene.fog = defaultFog;
+          }
+        }
+
+        renderer.setScissorTest(false);
+      }
+    } else if (state === 'lobby') {
+      // 大廳：全螢幕慢速環繞起點（算繪前暫時關閉 fog 避免被霧洗白）
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, W, H);
+      overviewCamera.camera.aspect = W / H;
+      overviewCamera.camera.updateProjectionMatrix();
+      overviewCamera.updateLobby(realDt);
+      scene.fog = null;
+      renderer.render(scene, overviewCamera.camera);
+      scene.fog = defaultFog;
+    } else {
+      // 結算畫面：全螢幕全場俯視（算繪前暫時關閉 fog 避免被霧洗白）
+      renderer.setScissorTest(false);
+      renderer.setViewport(0, 0, W, H);
+      overviewCamera.camera.aspect = W / H;
+      overviewCamera.camera.updateProjectionMatrix();
+      overviewCamera.updateOverview();
+      scene.fog = null;
+      renderer.render(scene, overviewCamera.camera);
+      scene.fog = defaultFog;
+    }
   }
 
   requestAnimationFrame(animate);
 }
 
-// 網頁載入完成後啟動遊戲
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', bootstrap);
 } else {

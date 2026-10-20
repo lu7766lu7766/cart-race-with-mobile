@@ -1,6 +1,6 @@
 // ============================================================
 //  utils.js — 常用的小工具
-//  包含數學輔助函式、亂數生成、時間格式化與簡易事件系統。
+//  包含數學輔助函式、亂數生成、時間格式化、視窗分割矩形計算與簡易事件系統。
 //  本模組為純邏輯，可在 Node.js 與瀏覽器環境中執行。
 // ============================================================
 
@@ -47,6 +47,39 @@ export function formatTime(sec) {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return `${m}:${s.toString().padStart(2, '0')}.${hundredths.toString().padStart(2, '0')}`;
+}
+
+// 分割畫面視窗幾何配置計算（支援 0~4 人）
+// 回傳包含 WebGL 座標系（原點在左下角，y 向上）與 CSS 座標系（原點在左上角，top 向下）的矩形清單
+export function getViewportRects(count, W, H) {
+  if (count <= 1) {
+    return [{ x: 0, y: 0, top: 0, w: W, h: H }];
+  }
+
+  if (count === 2) {
+    const halfW = Math.floor(W / 2);
+    return [
+      { x: 0, y: 0, top: 0, w: halfW, h: H },
+      { x: halfW, y: 0, top: 0, w: W - halfW, h: H },
+    ];
+  }
+
+  // 3 或 4 人：2×2 四格配置（3 人時第 4 格作為全場俯視視角）
+  const wLeft = Math.floor(W / 2);
+  const wRight = W - wLeft;
+  const hBottom = Math.floor(H / 2);
+  const hTop = H - hBottom;
+
+  return [
+    // 左上格（Cell 0）: WebGL y 在下半部之上（即 hBottom），CSS top 為 0
+    { x: 0, y: hBottom, top: 0, w: wLeft, h: hTop },
+    // 右上格（Cell 1）: WebGL y 在 hBottom，CSS top 為 0
+    { x: wLeft, y: hBottom, top: 0, w: wRight, h: hTop },
+    // 左下格（Cell 2）: WebGL y 為 0，CSS top 為 hTop
+    { x: 0, y: 0, top: hTop, w: wLeft, h: hBottom },
+    // 右下格（Cell 3）: WebGL y 為 0，CSS top 為 hTop
+    { x: wLeft, y: 0, top: hTop, w: wRight, h: hBottom },
+  ];
 }
 
 // 小型事件系統：game.on('事件名', 函式) 訂閱、emit('事件名', 資料) 通知

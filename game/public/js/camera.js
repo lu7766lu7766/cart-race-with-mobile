@@ -1,100 +1,130 @@
 // ============================================================
-//  camera.js — 多人共用智慧追蹤相機
-//  固定方向斜俯視視角（不跟隨單一車輛旋轉，多人同屏不暈眩）。
-//  自動計算所有真人賽車之包圍框，動態調整中心與高度（35 ~ 260），
-//  並同步更新日光陰影相機焦點。
+//  camera.js — 鏡頭管理（ChaseCamera 追尾鏡頭與 OverviewCamera 全場俯視）
+//  實現陸行鳥大賽車經典風格之追尾視角：平滑跟隨、速度感 FOV 動態變化、
+//  甩尾側滑延遲朝向跟隨、防穿地高程保護，以及 Sprite 名字圖層隔離（每位玩家不看自己的名字標籤）。
+//  本模組亦匯出純函式 getViewportRects 供分割畫面渲染與 HUD 面板排版使用。
 // ============================================================
 
 import * as THREE from 'three';
-import { clamp, damp } from './utils.js';
+import { CONFIG } from './config.js';
+import { clamp, damp, angleDiff, getViewportRects } from './utils.js';
 
-export class RaceCamera {
-  constructor(camera, light = null) {
-    this.camera = camera;
-    this.light = light;
+export { getViewportRects };
 
-    // 當前平滑目標點與相機高度
-    this.target = new THREE.Vector3(0, 0, 0);
-    this.height = 70;
+// 單人追尾視角相機（每位上場真人各分配一個）
+export class ChaseCamera {
+  constructor(slot, track) {
+    this.slot = slot;
+    this.track = track;
+
+    this.camera = new THREE.PerspectiveCamera(CONFIG.CHASE_FOV_MIN, 1, 1, 1000);
+    // 開啟全部玩家名字 Sprite 圖層（1~4）
+    for (let s = 1; s <= 4; s++) {
+      this.camera.layers.enable(s);
+    }
+    // 關閉自己那一格的名字 Sprite 圖層（自己不顯示自己的名字）
+    this.camera.layers.disable(slot + 1);
+
+    // 狀態追蹤
+    this.camHeading = 0;
+    this.currentFov = CONFIG.CHASE_FOV_MIN;
+    this.targetPos = new THREE.Vector3(0, 5, -10);
+    this.initialized = false;
   }
 
-  // 每幀更新相機位置與縮放
-  update(dt, racers) {
-    if (!racers || racers.length === 0) {
-      // 預設俯瞰賽道中央
-      this.target.set(0, 0, 0);
-      this.height = 140;
-      this._applyTransform();
-      return;
+  // 每幀更新相機位置與朝向
+  update(dt, car) {
+    if (!car) return;
+
+    // 初次初始化直接對齊車輛位置
+    if (!this.initialized) {
+      this.camHeading = car.heading;
+      const initFx = Math.sin(this.camHeading);
+      const initFz = Math.cos(this.camHeading);
+      this.camera.position.set(
+        car.x - initFx * CONFIG.CHASE_DISTANCE,
+        car.y + CONFIG.CHASE_HEIGHT,
+        car.z - initFz * CONFIG.CHASE_DISTANCE
+      );
+      this.initialized = true;
     }
 
-    // 優先框住真人玩家；若無真人則框住全體車輛
-    let targetRacers = racers.filter((r) => r.kind !== 'ai');
-    if (targetRacers.length === 0) {
-      targetRacers = racers;
+    // 1. 鏡頭朝向跟隨（平滑追隨 car.heading，率約 5）
+    // 打滑旋轉時鏡頭不跟隨車身打轉；倒車時鏡頭不反轉翻轉
+    if (car.spinTimer <= 0) {
+      const diff = angleDiff(this.camHeading, car.heading);
+      this.camHeading += diff * (1 - Math.exp(-CONFIG.CHASE_ROT_DAMP * dt));
     }
 
-    // 計算目標車輛的邊界框與速度前瞻
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
+    const fx = Math.sin(this.camHeading);
+    const fz = Math.cos(this.camHeading);
 
-    for (const r of targetRacers) {
-      const car = r.car;
-      if (!car) continue;
+    // 2. 目標相機位置（車尾後方 CHASE_DISTANCE，高度 CHASE_HEIGHT）
+    const desiredX = car.x - fx * CONFIG.CHASE_DISTANCE;
+    const desiredZ = car.z - fz * CONFIG.CHASE_DISTANCE;
+    let desiredY = car.y + CONFIG.CHASE_HEIGHT;
 
-      // 前瞻點（速度越快往前瞻越遠）
-      const lookAheadDist = car.speed * 0.4;
-      const fx = car.x + Math.sin(car.heading) * lookAheadDist;
-      const fz = car.z + Math.cos(car.heading) * lookAheadDist;
-
-      minX = Math.min(minX, car.x, fx);
-      maxX = Math.max(maxX, car.x, fx);
-      minZ = Math.min(minZ, car.z, fz);
-      maxZ = Math.max(maxZ, car.z, fz);
+    // 防穿地保護：鏡頭高度不得低於該處地面高度 + 1.5
+    if (this.track) {
+      const proj = this.track.project(desiredX, desiredZ);
+      const groundAtCam = this.track.groundHeight(proj.index, proj.t);
+      if (desiredY < groundAtCam + 1.5) {
+        desiredY = groundAtCam + 1.5;
+      }
     }
 
-    if (!Number.isFinite(minX)) {
-      minX = maxX = 0;
-      minZ = maxZ = 0;
+    // 位置平滑插值
+    this.camera.position.x = damp(this.camera.position.x, desiredX, CONFIG.CHASE_POS_DAMP, dt);
+    this.camera.position.y = damp(this.camera.position.y, desiredY, 6, dt);
+    this.camera.position.z = damp(this.camera.position.z, desiredZ, CONFIG.CHASE_POS_DAMP, dt);
+
+    // 3. 看向車子前方 CHASE_LOOK_AHEAD 處
+    const carFx = Math.sin(car.heading);
+    const carFz = Math.cos(car.heading);
+    const lookAtX = car.x + carFx * CONFIG.CHASE_LOOK_AHEAD;
+    const lookAtY = car.y + 1.5;
+    const lookAtZ = car.z + carFz * CONFIG.CHASE_LOOK_AHEAD;
+    this.camera.lookAt(lookAtX, lookAtY, lookAtZ);
+
+    // 4. 動態速度感 FOV（60 ~ 72，加速再 +6）
+    const speedRatio = clamp(Math.abs(car.speed) / CONFIG.MAX_SPEED, 0, 1);
+    let targetFov = CONFIG.CHASE_FOV_MIN + (CONFIG.CHASE_FOV_MAX - CONFIG.CHASE_FOV_MIN) * speedRatio;
+    if (car.boostTimer > 0) {
+      targetFov += CONFIG.CHASE_FOV_BOOST;
     }
+    this.currentFov = damp(this.currentFov, targetFov, 4, dt);
+    this.camera.fov = this.currentFov;
+    this.camera.updateProjectionMatrix();
+  }
+}
 
-    // 計算幾何中心
-    const centerX = (minX + maxX) / 2;
-    const centerZ = (minZ + maxZ) / 2;
-
-    // 計算包圍盒跨度並推導合適的相機高度（範圍 35 ~ 260）
-    const spanX = maxX - minX;
-    const spanZ = maxZ - minZ;
-    const maxSpan = Math.max(spanX, spanZ);
-
-    const desiredHeight = clamp(35 + maxSpan * 0.75, 35, 260);
-
-    // 平滑插值（Damp）
-    this.target.x = damp(this.target.x, centerX, 5, dt);
-    this.target.z = damp(this.target.z, centerZ, 5, dt);
-    this.target.y = 0;
-    this.height = damp(this.height, desiredHeight, 4, dt);
-
-    this._applyTransform();
+// 全場俯視/環繞相機（大廳慢速環繞、結算畫面、3 人模式第 4 格全場俯視或 0 人除錯）
+export class OverviewCamera {
+  constructor(track = null) {
+    this.track = track;
+    this.camera = new THREE.PerspectiveCamera(50, 1, 1, 2000);
+    // 開啟全部玩家名字圖層
+    for (let s = 1; s <= 4; s++) {
+      this.camera.layers.enable(s);
+    }
+    this.orbitAngle = 0;
   }
 
-  // 套用相機位置與陰影光照焦點
-  _applyTransform() {
-    // 固定斜上方俯視角度（向 +Z 偏移高度的 0.75 倍）
-    const camX = this.target.x;
-    const camY = this.height;
-    const camZ = this.target.z + this.height * 0.75;
+  // 大廳環繞視角
+  updateLobby(dt) {
+    this.orbitAngle += 0.25 * dt;
+    const r = 85;
+    const cx = 0;
+    const cz = 110 * 1.15; // 起點直道附近
+    this.camera.position.set(cx + Math.cos(this.orbitAngle) * r, 35, cz + Math.sin(this.orbitAngle) * r);
+    this.camera.lookAt(cx, 5, cz);
+    this.camera.updateProjectionMatrix();
+  }
 
-    this.camera.position.set(camX, camY, camZ);
-    this.camera.lookAt(this.target.x, this.target.y, this.target.z);
-
-    // 陰影聚焦點跟隨相機中心移動
-    if (this.light) {
-      this.light.position.set(this.target.x + 60, 100, this.target.z + 40);
-      this.light.target.position.set(this.target.x, 0, this.target.z);
-      this.light.target.updateMatrixWorld();
-    }
+  // 全場俯視（框住整條賽道）
+  updateOverview() {
+    this.camera.position.set(0, 360, 260);
+    this.camera.lookAt(0, 0, -10);
+    this.camera.updateProjectionMatrix();
   }
 }

@@ -1,6 +1,7 @@
 // ============================================================
 //  ai.js — 電腦玩家（AI）輸入控制
-//  負責路徑巡航、車道偏移、彎道減速、卡住脫困與智慧道具施放。
+//  負責路徑巡航導航（左右轉向新定義）、車道偏移、急彎減速、卡住脫困，
+//  以及陸行鳥大賽車魔石道具升級保留策略（60% 機率留到下一排箱子後施放）。
 //  本模組為純邏輯運算，在 Node.js 中可正常 import 執行。
 // ============================================================
 
@@ -24,14 +25,18 @@ export class AIInput {
     this.stuckCheckTimer = 0;
     this.lastProgress = 0;
 
-    // 道具施放思考計時器
+    // 道具施放與升級保留計時器
     this.itemWaitTimer = -1;
-    this.hasItemLastFrame = false;
+    this.lastItem = null;
+    this.lastItemLevel = 0;
+    this.holdForUpgrade = false;
+    this.holdTimer = 0;
+    this.targetPassIndex = null;
   }
 
   // 取得當前 AI 輸入狀態
   getState() {
-    const dt = 1 / 60; // 核心模擬固定步長
+    const dt = 1 / 60;
     let steer = 0;
     let throttle = 0;
     let brake = 0;
@@ -45,7 +50,6 @@ export class AIInput {
     const track = car.track;
 
     // 1. 卡住脫困機制
-    // racing 狀態、速度 < 2 且 1.5 秒內 progress 增加 < 3 → 倒車＋反向打方向 1 秒
     if (this.game && this.game.state === 'racing') {
       this.stuckCheckTimer += dt;
       if (this.stuckCheckTimer >= 1.5) {
@@ -72,71 +76,97 @@ export class AIInput {
     }
 
     // 2. 賽道巡航路徑導航
-    // 依據當前車速前瞻 12 ~ 20 個取樣點
     const speedRatio = clamp(Math.abs(car.speed) / CONFIG.MAX_SPEED, 0, 1);
-    const lookaheadSamples = Math.floor(12 + speedRatio * 8);
+    const lookaheadSamples = Math.floor(14 + speedRatio * 10);
     const targetIdx = (car.trackIndex + lookaheadSamples) % track.N;
 
-    // 計算目標路徑點（加入固定車道偏移）
     const targetPos = track.pointAtLateral(targetIdx, this.laneOffset);
     const dx = targetPos.x - car.x;
     const dz = targetPos.z - car.z;
 
-    // 前進朝向為 (sin(h), cos(h))，計算與目標點的角度差
     const targetHeading = Math.atan2(dx, dz);
     const diff = angleDiff(car.heading, targetHeading);
 
-    // 轉向控制
-    steer = clamp(diff * 2.8, -1, 1);
+    // 6.0 修正：steer = +1 為往右轉（減少 heading），因此 steer = clamp(-diff * 2.8, -1, 1)
+    steer = clamp(-diff * 2.8, -1, 1);
 
     // 3. 油門與煞車控制
-    // 依據當前車輛狀態（是否加速中、是否在草地）決定即時最高速基準
-    let currentBaseMax = car.boostTimer > 0 ? CONFIG.BOOST_SPEED : CONFIG.MAX_SPEED;
+    let currentBaseMax = car.boostTimer > 0
+      ? (CONFIG.BOOST_SPEED * car.stats.boostSpeedMult)
+      : (CONFIG.MAX_SPEED * car.stats.maxSpeedMult);
+
     if (Math.abs(car.lateral) > (track.width / 2)) {
-      currentBaseMax *= CONFIG.OFFROAD_FACTOR;
+      currentBaseMax *= car.stats.offroadFactor;
     }
     const maxAllowedSpeed = currentBaseMax * this.speedFactor;
+
     if (Math.abs(diff) > 0.85) {
-      // 遇急彎時收油門
       throttle = 0.2;
       if (car.speed > maxAllowedSpeed * 0.75) {
         brake = 0.4;
       }
     } else if (car.speed >= maxAllowedSpeed) {
-      // 超過 AI 速度上限時鬆開油門
       throttle = 0;
       brake = 0;
     } else {
-      // 直道或一般彎道全油門
       throttle = 1.0;
       brake = 0;
     }
 
-    // 4. 智慧道具施放
+    // 4. 道具升級與智慧施放策略（6.4）
     const currentItem = car.player?.item;
+    const currentLevel = car.player?.itemLevel || 1;
+
     if (currentItem) {
-      if (!this.hasItemLastFrame) {
-        // 剛拿到道具，隨機等待 1 ~ 3 秒後決定施放
-        this.itemWaitTimer = rand(1.0, 3.0, this.rng);
-        this.hasItemLastFrame = true;
-      } else if (this.itemWaitTimer > 0) {
-        this.itemWaitTimer -= dt;
-        if (this.itemWaitTimer <= 0) {
-          // 根據道具種類進行時機判斷
+      // 偵測是否為剛抽到或剛升級的道具
+      if (this.lastItem !== currentItem || this.lastItemLevel !== currentLevel) {
+        this.lastItem = currentItem;
+        this.lastItemLevel = currentLevel;
+
+        // 若為 Lv1 或 Lv2，以 60% 機率決定留著等升級
+        if (currentLevel < 3 && this.rng() < 0.6) {
+          this.holdForUpgrade = true;
+          this.holdTimer = 12.0; // 最多留 12 秒
+          this.targetPassIndex = this._findNextBoxRowIndex(car.trackIndex, track);
+        } else {
+          this.holdForUpgrade = false;
+          this.itemWaitTimer = rand(1.0, 3.0, this.rng);
+        }
+      }
+
+      // 若處於留著等升級狀態
+      if (this.holdForUpgrade) {
+        this.holdTimer -= dt;
+        // 檢查是否已通過下一排道具箱
+        let hasPassed = false;
+        if (this.targetPassIndex != null) {
+          let delta = car.trackIndex - this.targetPassIndex;
+          if (delta < -track.N / 2) delta += track.N;
+          if (delta > track.N / 2) delta -= track.N;
+          if (delta > 0 && delta < 50) hasPassed = true;
+        }
+
+        if (hasPassed || this.holdTimer <= 0) {
+          this.holdForUpgrade = false;
+          this.itemWaitTimer = rand(0.5, 2.0, this.rng);
+        }
+      }
+
+      // 當不再保留時，依照各道具特性施放
+      if (!this.holdForUpgrade) {
+        if (this.itemWaitTimer > 0) {
+          this.itemWaitTimer -= dt;
+        } else {
           if (currentItem === 'nitro') {
-            // 氮氣在直線上施放（轉角小）
-            if (Math.abs(diff) < 0.25) useItem = true;
-            else this.itemWaitTimer = 0.5; // 再等半秒
+            if (Math.abs(diff) < 0.3) useItem = true;
+            else this.itemWaitTimer = 0.4;
           } else if (currentItem === 'missile') {
-            // 導彈等前方有車時發射
-            const hasRacerAhead = this._isRacerAhead(car);
-            if (hasRacerAhead || Math.abs(diff) < 0.3) useItem = true;
+            const hasAhead = this._isRacerAhead(car);
+            if (hasAhead || currentLevel >= 2 || Math.abs(diff) < 0.35) useItem = true;
             else this.itemWaitTimer = 0.5;
           } else if (currentItem === 'banana') {
-            // 香蕉皮等後方有車或直接丟下
             useItem = true;
           } else if (currentItem === 'shield') {
-            // 護盾立即施放防身
             useItem = true;
           } else {
             useItem = true;
@@ -144,20 +174,39 @@ export class AIInput {
         }
       }
     } else {
-      this.hasItemLastFrame = false;
+      this.lastItem = null;
+      this.lastItemLevel = 0;
+      this.holdForUpgrade = false;
       this.itemWaitTimer = -1;
     }
 
     return { steer, throttle, brake, useItem };
   }
 
+  // 尋找沿賽道前方的下一排道具箱索引
+  _findNextBoxRowIndex(myIndex, track) {
+    if (!this.game || !this.game.itemSystem || !this.game.itemSystem.boxes) {
+      return null;
+    }
+    const boxIndices = [...new Set(this.game.itemSystem.boxes.map((b) => b.index))];
+    boxIndices.sort((a, b) => a - b);
+
+    for (const bIdx of boxIndices) {
+      let delta = bIdx - myIndex;
+      if (delta < -track.N / 2) delta += track.N;
+      if (delta > track.N / 2) delta -= track.N;
+      if (delta > 0) return bIdx;
+    }
+    return boxIndices[0] || null;
+  }
+
   // 判斷前方視線內是否有其他賽車
   _isRacerAhead(myCar) {
     if (!this.game || !this.game.racers) return false;
     for (const r of this.game.racers) {
-      if (!r.car || r.car === myCar) continue;
+      if (!r.car || r.car === myCar || r.car.finished) continue;
       const progressDiff = r.car.progress - myCar.progress;
-      if (progressDiff > 0 && progressDiff < 100) {
+      if (progressDiff > 0 && progressDiff < (myCar.track.N / 2)) {
         return true;
       }
     }

@@ -1,7 +1,8 @@
 // ============================================================
 //  game.js — 遊戲核心管理類別
 //  包含遊戲狀態機（loading -> lobby -> countdown -> racing -> results）、
-//  玩家與電腦參賽者管理、固定步長物理模擬迴圈（1/60s）、圈數與即時名次結算，
+//  玩家與電腦參賽者管理、viewRacers 鏡頭快照、固定步長物理模擬迴圈（1/60s）、
+//  起跑衝刺判定、車輛碰撞（高度差、Lv3 效果與重戰車推力）、圈數與即時名次結算，
 //  以及提供外部（HUD、網路、輸入系統）操作的統一 API。
 //  本類別無 DOM 依賴，可在 Node.js 環境中進行無頭（headless）測試。
 // ============================================================
@@ -24,11 +25,13 @@ export class Game extends Emitter {
     this.itemSystem = new ItemSystem({ game: this, track: this.track, rng: this.rng });
 
     // 真人玩家列表（keyboard 或 remote）
-    // key 為 playerId，value 為 player 物件
     this.players = new Map();
 
-    // 當前比賽參賽者陣列（最多 MAX_PLAYERS 台，包含真人與補位 AI）
+    // 當前比賽參賽者陣列（最多 MAX_PLAYERS 台）
     this.racers = [];
+
+    // 6.1: 本場比賽上場真人快照（整場固定，即使中途斷線仍跟隨該車）
+    this.viewRacers = [];
 
     // 狀態機：loading -> lobby -> countdown -> racing -> results
     this._state = 'lobby';
@@ -51,7 +54,7 @@ export class Game extends Emitter {
     this.accumulator = 0;
     this.nextPlayerId = 1;
 
-    // 車輛碰撞冷卻記錄（避免重疊時每幀持續扣速卡死）
+    // 車輛碰撞冷卻記錄
     this.collisionCooldowns = new Map();
   }
 
@@ -66,7 +69,6 @@ export class Game extends Emitter {
     const fixedDt = 1 / 60;
     let steps = 0;
 
-    // 每幀最多執行 5 步，避免切換分頁回到頁面時產生過大累計跳躍
     while (this.accumulator >= fixedDt && steps < 5) {
       this.step(fixedDt);
       this.accumulator -= fixedDt;
@@ -85,8 +87,22 @@ export class Game extends Emitter {
     // --------------------------------------------------------
     if (this._state === 'countdown') {
       this.countdownTimer += dt;
-      const prevVal = this.countdownValue;
       this.countdownValue = Math.max(1, 3 - Math.floor(this.countdownTimer));
+
+      // 6.3 起跑衝刺輸入邊緣檢測（rising edge: 上一步 <= 0.5，這一步 > 0.5）
+      for (const racer of this.racers) {
+        if (!racer.input) continue;
+        let rawThrottle = 0;
+        try {
+          rawThrottle = racer.input.getState?.()?.throttle ?? 0;
+        } catch (e) {}
+        const currT = clamp(rawThrottle, 0, 1);
+
+        if (currT > 0.5 && (racer.lastThrottle ?? 0) <= 0.5) {
+          racer.lastPressTime = this.countdownTimer;
+        }
+        racer.lastThrottle = currT;
+      }
 
       if (this.countdownTimer >= 3.0) {
         // 倒數結束，GO！正式開賽
@@ -98,7 +114,27 @@ export class Game extends Emitter {
           if (racer.car) {
             racer.car.maxLapsDone = 0;
             racer.car.lapStartTime = 0;
+
+            // 結算起跑衝刺
+            if (racer.kind === 'ai') {
+              if (this.rng() < 0.5) {
+                racer.car.applyBoost(CONFIG.ROCKET_BOOST_TIME * racer.car.stats.startBoostTime);
+              }
+            } else {
+              const isHeld = (racer.lastThrottle ?? 0) > 0.5;
+              if (isHeld && racer.lastPressTime != null) {
+                // 最後一次按下在 1 之後（countdownTimer >= 2.0，GO 前最後 1 秒內）
+                if (racer.lastPressTime >= 2.0) {
+                  racer.car.applyBoost(CONFIG.ROCKET_BOOST_TIME * racer.car.stats.startBoostTime);
+                } else {
+                  // 在 3 或 2 時太早按下且持續按住：空轉 0.5 秒懲罰
+                  racer.car.spinOutTimer = CONFIG.ROCKET_SPIN_TIME;
+                  racer.car.speed = 0;
+                }
+              }
+            }
           }
+
           if (racer.input && typeof racer.input.reset === 'function') {
             racer.input.reset();
           }
@@ -131,7 +167,7 @@ export class Game extends Emitter {
     for (const racer of this.racers) {
       if (!racer.car) continue;
 
-      let rawInput = { steer: 0, throttle: 0, brake: 0, useItem: false };
+      let rawInput = { steer: 0, throttle: 0, brake: 0, drift: false, useItem: false };
       try {
         if (racer.input && typeof racer.input.getState === 'function') {
           rawInput = racer.input.getState() || rawInput;
@@ -140,17 +176,17 @@ export class Game extends Emitter {
         console.error(`讀取玩家 ${racer.name} 輸入時發生錯誤：`, err);
       }
 
-      // 輸入安全限制（clamp 到標準合法區間，非有限數一律當 0）
       const steer = Number.isFinite(rawInput.steer) ? clamp(rawInput.steer, -1, 1) : 0;
       const throttle = Number.isFinite(rawInput.throttle) ? clamp(rawInput.throttle, 0, 1) : 0;
       const brake = Number.isFinite(rawInput.brake) ? clamp(rawInput.brake, 0, 1) : 0;
+      const drift = Boolean(rawInput.drift) || (throttle > 0.5 && brake > 0.5);
       const useItem = Boolean(rawInput.useItem);
 
       if (useItem) {
         this.itemSystem.useItem(racer);
       }
 
-      racer.car.update(dt, { steer, throttle, brake }, this.track);
+      racer.car.update(dt, { steer, throttle, brake, drift }, this.track);
 
       if (racer.car.wallHitThisFrame) {
         this.emit('sound', 'wall');
@@ -166,7 +202,7 @@ export class Game extends Emitter {
       }
     }
 
-    // 車對車圓形彈性互推碰撞
+    // 車對車圓形彈性互推碰撞（加入高度差判定、Lv3 效果與角色推力乘數）
     const carCount = this.racers.length;
     for (let i = 0; i < carCount; i++) {
       for (let j = i + 1; j < carCount; j++) {
@@ -175,6 +211,9 @@ export class Game extends Emitter {
         const carA = racerA.car;
         const carB = racerB.car;
         if (!carA || !carB) continue;
+
+        // 6.5: 高度差 > 2.5 不碰撞
+        if (Math.abs(carA.y - carB.y) > 2.5) continue;
 
         const dx = carB.x - carA.x;
         const dz = carB.z - carA.z;
@@ -187,20 +226,34 @@ export class Game extends Emitter {
           const nx = dist > 0.0001 ? dx / dist : 1;
           const nz = dist > 0.0001 ? dz / dist : 0;
 
-          // 兩台車完全推開（各推一半重疊距離）
-          carA.x -= nx * (overlap * 0.5);
-          carA.z -= nz * (overlap * 0.5);
-          carB.x += nx * (overlap * 0.5);
-          carB.z += nz * (overlap * 0.5);
+          // 6.6: 套用重戰車（slot 3）推開比例
+          const factorA = 0.5 * carA.stats.pushMultSelf * carB.stats.pushMultOther;
+          const factorB = 0.5 * carB.stats.pushMultSelf * carA.stats.pushMultOther;
 
-          // 計算兩車相對速度在連心線方向的分量（接近速度）
+          carA.x -= nx * (overlap * factorA);
+          carA.z -= nz * (overlap * factorA);
+          carB.x += nx * (overlap * factorB);
+          carB.z += nz * (overlap * factorB);
+
+          // 6.4: Lv3 氮氣或 Lv3 護盾使對方打滑
+          if (carA.nitroLevel === 3 || carA.shieldLevel === 3) {
+            carB.hitBanana();
+            this.emit('playerHit', { player: racerB, by: racerA.id });
+            this.emit('sound', 'spin');
+          }
+          if (carB.nitroLevel === 3 || carB.shieldLevel === 3) {
+            carA.hitBanana();
+            this.emit('playerHit', { player: racerA, by: racerB.id });
+            this.emit('sound', 'spin');
+          }
+
+          // 相對接近速度計算
           const vxA = Math.sin(carA.heading) * carA.speed;
           const vzA = Math.cos(carA.heading) * carA.speed;
           const vxB = Math.sin(carB.heading) * carB.speed;
           const vzB = Math.cos(carB.heading) * carB.speed;
           const approachSpeed = (vxB - vxA) * nx + (vzB - vzA) * nz;
 
-          // 只有兩車「互相接近」（接近速度 < -0.5）且冷卻結束才扣速度一次，避免卡死
           const pairKey = `${racerA.id}_${racerB.id}`;
           const cd = this.collisionCooldowns.get(pairKey) || 0;
           if (cd <= 0 && approachSpeed < -0.5) {
@@ -221,25 +274,22 @@ export class Game extends Emitter {
       const car = racer.car;
       if (!car || car.finished) continue;
 
-      // 檢查是否真正完成一圈
       if (car.lapsDone > car.maxLapsDone) {
         car.maxLapsDone = car.lapsDone;
         car.lapTimes.push(this.raceTime - car.lapStartTime);
         car.lapStartTime = this.raceTime;
 
         if (car.lapsDone < CONFIG.LAPS) {
-          // 進入下一圈
           this.emit('lapChanged', { player: racer, lap: car.lapsDone + 1 });
           this.emit('sound', 'lap');
         } else {
-          // 跑滿指定圈數完賽
           car.finished = true;
           car.finishTime = this.raceTime;
 
           const finishedRank = this.racers.filter((r) => r.car && r.car.finished).length;
           racer.rank = finishedRank;
 
-          // 完賽後交由慢速 AI 接手巡航
+          // 完賽後由慢速 AI 接手巡航
           racer.input = new AIInput({
             car,
             game: this,
@@ -263,14 +313,12 @@ export class Game extends Emitter {
       const carB = b.car;
       if (!carA || !carB) return 0;
 
-      // 完賽者以完賽成績排序
       if (carA.finished && carB.finished) {
         return carA.finishTime - carB.finishTime;
       }
       if (carA.finished) return -1;
       if (carB.finished) return 1;
 
-      // 未完賽者依賽道累積進度 progress 排序
       return carB.progress - carA.progress;
     });
 
@@ -305,13 +353,11 @@ export class Game extends Emitter {
         }
       }
     } else {
-      // 只有 AI 或真人全部斷線時，所有車輛都完賽才結束（不可對空陣列呼叫 every）
       if (this.racers.length > 0 && this.racers.every((r) => r.car && r.car.finished)) {
         shouldEndRace = true;
       }
     }
 
-    // 安全時間上限，超過 MAX_RACE_SECONDS 強制結算
     if (this.raceTime >= (CONFIG.MAX_RACE_SECONDS || 300)) {
       shouldEndRace = true;
     }
@@ -326,7 +372,6 @@ export class Game extends Emitter {
     this._state = 'results';
     this.resultsTimer = 0;
 
-    // 未完賽的車輛依據進度名次定案，成績記為 null
     for (const racer of this.racers) {
       if (racer.car && !racer.car.finished) {
         racer.rank = racer.position;
@@ -340,10 +385,9 @@ export class Game extends Emitter {
   // 加入真人玩家（鍵盤或遠端手機）
   addPlayer({ name, kind = 'keyboard', input = null } = {}) {
     if (this.players.size >= CONFIG.MAX_PLAYERS) {
-      return null; // 真人已滿 4 位
+      return null;
     }
 
-    // 尋找 0~3 中第一個未被占用的 slot
     const usedSlots = new Set([...this.players.values()].map((p) => p.slot));
     let slot = 0;
     while (slot < CONFIG.MAX_PLAYERS && usedSlots.has(slot)) {
@@ -366,6 +410,7 @@ export class Game extends Emitter {
       position: null,
       rank: null,
       item: null,
+      itemLevel: 0,
       rolling: false,
       rollingTimer: 0,
     };
@@ -383,7 +428,6 @@ export class Game extends Emitter {
     const player = this.players.get(playerId);
     this.players.delete(playerId);
 
-    // 若比賽進行中有人斷線離開，將該車改為 AI 接手繼續跑
     if (this._state === 'countdown' || this._state === 'racing') {
       const racer = this.racers.find((r) => r.id === playerId);
       if (racer) {
@@ -408,9 +452,8 @@ export class Game extends Emitter {
     return Array.from(this.players.values()).sort((a, b) => a.slot - b.slot);
   }
 
-  // 取得玩家狀態（提供第二階段遠端控制器查詢）
+  // 取得玩家狀態（包含 6.4 之 itemLevel）
   getStatus(playerId) {
-    // 先從 racers 中找（比賽進行中），若無則從 players 中找
     const racer = this.racers.find((r) => r.id === playerId);
     const human = this.players.get(playerId);
     const p = racer || human;
@@ -420,6 +463,7 @@ export class Game extends Emitter {
     if (!p.inRace || !p.car || this._state === 'lobby') {
       return {
         item: null,
+        itemLevel: 0,
         position: null,
         lap: 0,
         totalLaps: CONFIG.LAPS,
@@ -431,6 +475,7 @@ export class Game extends Emitter {
 
     return {
       item: p.item,
+      itemLevel: p.itemLevel || 0,
       position: p.position,
       lap: p.car.lap,
       totalLaps: CONFIG.LAPS,
@@ -444,7 +489,6 @@ export class Game extends Emitter {
   startRace() {
     if (this._state !== 'lobby') return;
 
-    // 清空舊參賽車
     this.racers = [];
 
     // 1. 將目前已加入的真人標記為 inRace = true
@@ -452,6 +496,7 @@ export class Game extends Emitter {
     for (const human of humanList) {
       human.inRace = true;
       human.item = null;
+      human.itemLevel = 0;
       human.rolling = false;
       human.rollingTimer = 0;
       human.position = null;
@@ -477,6 +522,7 @@ export class Game extends Emitter {
           position: null,
           rank: null,
           item: null,
+          itemLevel: 0,
           rolling: false,
           rollingTimer: 0,
         };
@@ -484,12 +530,22 @@ export class Game extends Emitter {
       }
     }
 
-    // 3. 依發車位為所有參賽者建立車輛實例
+    // 3. 建立 viewRacers 快照（整場固定，追尾鏡頭視窗配置依據）
+    this.viewRacers = [...humanList];
+
+    // 4. 依發車位為所有參賽者建立車輛實例，並串接 onEvent
     for (const racer of this.racers) {
       racer.car = new Car({
         slot: racer.slot,
         track: this.track,
         player: racer,
+        onEvent: (name, data) => {
+          this.emit(name, { player: racer, ...data });
+          if (name === 'miniTurbo') this.emit('sound', 'mini_turbo');
+          else if (name === 'jumped') this.emit('sound', 'jump');
+          else if (name === 'landed') this.emit('sound', 'land');
+          else if (name === 'wallHit') this.emit('sound', 'wall');
+        },
       });
 
       if (racer.kind === 'ai') {
@@ -499,13 +555,21 @@ export class Game extends Emitter {
           rng: this.rng,
         });
       }
+
+      // 起跑衝刺檢測初始化（記錄當前輸入 throttle 避免開賽前固定按著被誤判為按下）
+      try {
+        racer.lastThrottle = clamp(racer.input?.getState?.()?.throttle ?? 0, 0, 1);
+      } catch (e) {
+        racer.lastThrottle = 0;
+      }
+      racer.lastPressTime = null;
     }
 
-    // 4. 重設道具系統與碰撞冷卻
+    // 5. 重設道具系統與碰撞冷卻
     this.itemSystem.reset();
     this.collisionCooldowns.clear();
 
-    // 5. 設定倒數並切換狀態
+    // 6. 設定倒數並切換狀態
     this.countdownTimer = 0;
     this.countdownValue = 3;
     this._state = 'countdown';
@@ -527,12 +591,13 @@ export class Game extends Emitter {
     this.itemSystem.reset();
     this.collisionCooldowns.clear();
     this.racers = [];
+    this.viewRacers = [];
 
-    // 重設真人玩家狀態
     for (const human of this.players.values()) {
       human.inRace = false;
       human.car = null;
       human.item = null;
+      human.itemLevel = 0;
       human.rolling = false;
       human.rollingTimer = 0;
       human.position = null;

@@ -1,32 +1,24 @@
 // ============================================================
-//  hud.js — 遊戲介面管理（大廳、倒數、抬頭顯示、結算、小地圖與 3D 浮動姓名標籤）
-//  採用高效能 DOM 快取更新機制（不頻繁重建 DOM，僅更新文字與樣式）。
-//  支援 CSS2DRenderer 呈現車頭 3D 姓名標籤，並於 Canvas 繪製即時小地圖。
+//  hud.js — 遊戲介面管理（大廳角色說明、倒數、分割畫面 HUD 面板、小地圖與結算）
+//  支援分割畫面多鏡頭：依據 viewRacers 快照與 getViewportRects，
+//  為每位真人賽車在對應螢幕格子疊加專屬 DOM 面板（名次、圈數、道具星星、速度表與甩尾火花條）。
+//  已移除舊版 CSS2DRenderer，車頂姓名改由 3D 空間之 Sprite 渲染。
 // ============================================================
 
-import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { CONFIG, KARTS, ITEMS } from './config.js';
-import { formatTime } from './utils.js';
+import { formatTime, clamp, getViewportRects } from './utils.js';
 
 export class HUD {
   constructor(container, game) {
     this.container = container;
     this.game = game;
 
-    // 建立 CSS2DRenderer（用於車頂 3D 名字標籤）
-    this.labelRenderer = new CSS2DRenderer();
-    this.labelRenderer.setSize(window.innerWidth, window.innerHeight);
-    this.labelRenderer.domElement.className = 'label-renderer';
-    this.container.appendChild(this.labelRenderer.domElement);
-
-    this.carLabels = new Map(); // racerId -> CSS2DObject
-
     // 建立 DOM 介面元素結構
     this._createDOM();
 
     // 監聽視窗縮放
     window.addEventListener('resize', () => {
-      this.labelRenderer.setSize(window.innerWidth, window.innerHeight);
+      this._updateLayout();
       this._drawMinimapStatic();
     });
 
@@ -54,8 +46,8 @@ export class HUD {
         </div>
         <div class="slots-container" id="playerSlots"></div>
         <div class="lobby-controls-help">
-          <p>⌨️ 玩家 1：按 <strong>↑</strong> 加入（方向鍵駕駛，Enter 道具/開始）</p>
-          <p>⌨️ 玩家 2：按 <strong>W</strong> 加入（WASD 駕駛，空白鍵 道具）</p>
+          <p>⌨️ 玩家 1：按 <strong>↑</strong> 加入（方向鍵駕駛，右Shift 甩尾，Enter 道具/開始）</p>
+          <p>⌨️ 玩家 2：按 <strong>W</strong> 加入（WASD 駕駛，左Shift 甩尾，空白鍵 道具）</p>
           <p class="start-hint">按 <strong>Enter</strong> 開始比賽！</p>
         </div>
       </div>
@@ -73,44 +65,62 @@ export class HUD {
     this.racingEl.className = 'screen racing-screen';
     this.racingEl.style.display = 'none';
 
-    // 頂部賽事計時
+    // 頂部全場比賽計時
     this.timerEl = document.createElement('div');
     this.timerEl.className = 'race-timer';
     this.timerEl.textContent = '0:00.00';
     this.racingEl.appendChild(this.timerEl);
 
-    // 四個角落玩家卡片容器
-    this.cardsContainer = document.createElement('div');
-    this.cardsContainer.className = 'player-cards-container';
-    this.playerCards = [];
+    // 分割畫面每格專屬面板容器
+    this.cellPanelsContainer = document.createElement('div');
+    this.cellPanelsContainer.className = 'cell-panels-container';
+    this.cellPanels = [];
 
-    // 四個角落樣式位置
-    const cardPositions = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
     for (let i = 0; i < CONFIG.MAX_PLAYERS; i++) {
-      const card = document.createElement('div');
-      card.className = `player-card ${cardPositions[i]}`;
-      card.innerHTML = `
-        <div class="card-header">
-          <span class="card-name">玩家 ${i + 1}</span>
-          <span class="card-pos">#1</span>
-        </div>
-        <div class="card-body">
-          <div class="card-lap">圈數 1/3</div>
-          <div class="card-item-slot">
-            <span class="card-item-icon"></span>
+      const panel = document.createElement('div');
+      panel.className = 'cell-hud-panel';
+      panel.style.display = 'none';
+      panel.innerHTML = `
+        <div class="cell-top-left">
+          <div class="cell-pos">1st</div>
+          <div class="cell-lap-col">
+            <div class="cell-lap">LAP 1/3</div>
+            <div class="cell-time" style="display:none;">0:00.00</div>
           </div>
         </div>
+        <div class="cell-top-right">
+          <div class="cell-item-box">
+            <span class="cell-item-icon"></span>
+            <span class="cell-item-stars"></span>
+          </div>
+        </div>
+        <div class="cell-bottom-left">
+          <div class="cell-speedo">
+            <span class="cell-speed-num">0</span>
+            <span class="cell-speed-unit">KM/H</span>
+            <div class="cell-speed-bar-bg">
+              <div class="cell-speed-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+        <div class="cell-bottom-center">
+          <div class="cell-drift-meter" style="display:none;">
+            <div class="cell-drift-bar-fill"></div>
+          </div>
+        </div>
+        <div class="cell-hit-flash" style="display:none;"></div>
+        <div class="cell-finish-badge" style="display:none;">FINISH!</div>
       `;
-      this.cardsContainer.appendChild(card);
-      this.playerCards.push(card);
+      this.cellPanelsContainer.appendChild(panel);
+      this.cellPanels.push(panel);
     }
-    this.racingEl.appendChild(this.cardsContainer);
+    this.racingEl.appendChild(this.cellPanelsContainer);
 
-    // 底部中央小地圖 Canvas
+    // 小地圖 Canvas
     this.minimapCanvas = document.createElement('canvas');
     this.minimapCanvas.className = 'minimap-canvas';
-    this.minimapCanvas.width = 160;
-    this.minimapCanvas.height = 100;
+    this.minimapCanvas.width = 180;
+    this.minimapCanvas.height = 110;
     this.minimapCtx = this.minimapCanvas.getContext('2d');
     this.racingEl.appendChild(this.minimapCanvas);
 
@@ -142,14 +152,12 @@ export class HUD {
     this.container.appendChild(this.root);
   }
 
-  // 預先繪製靜態小地圖軌跡
+  // 繪製靜態小地圖軌跡
   _drawMinimapStatic() {
     if (!this.game || !this.game.track) return;
     const track = this.game.track;
     const canvas = this.minimapCanvas;
-    const ctx = this.minimapCtx;
 
-    // 計算賽道包圍盒以進行正規化對齊
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     for (const p of track.points) {
       if (p.x < minX) minX = p.x;
@@ -158,7 +166,7 @@ export class HUD {
       if (p.z > maxZ) maxZ = p.z;
     }
 
-    const pad = 10;
+    const pad = 12;
     const w = maxX - minX;
     const h = maxZ - minZ;
     const scale = Math.min((canvas.width - pad * 2) / w, (canvas.height - pad * 2) / h);
@@ -170,11 +178,33 @@ export class HUD {
     };
   }
 
+  // 依真人數量與視窗尺寸調整小地圖定位
+  _updateLayout() {
+    const viewRacers = this.game.viewRacers || [];
+    const count = viewRacers.length;
+
+    if (count <= 1) {
+      // 1 人時小地圖放右下角
+      this.minimapCanvas.style.display = 'block';
+      this.minimapCanvas.classList.remove('center-mode');
+      this.minimapCanvas.classList.add('corner-mode');
+    } else if (count === 3) {
+      // 3 人時不顯示小地圖（第 4 格全場俯視鏡頭本身就是地圖）
+      this.minimapCanvas.style.display = 'none';
+      this.minimapCanvas.classList.remove('corner-mode');
+      this.minimapCanvas.classList.remove('center-mode');
+    } else {
+      // 2、4 人分割畫面時小地圖置於十字交界正中央
+      this.minimapCanvas.style.display = 'block';
+      this.minimapCanvas.classList.remove('corner-mode');
+      this.minimapCanvas.classList.add('center-mode');
+    }
+  }
+
   // 每幀更新 HUD
-  update(camera = null) {
+  update() {
     const state = this.game.state;
 
-    // 控制各層顯示/隱藏
     this.lobbyEl.style.display = state === 'lobby' ? 'flex' : 'none';
     this.countdownEl.style.display = state === 'countdown' ? 'flex' : 'none';
     this.racingEl.style.display = (state === 'racing' || state === 'countdown') ? 'block' : 'none';
@@ -190,19 +220,9 @@ export class HUD {
     } else if (state === 'results') {
       this._updateResults();
     }
-
-    // 更新 3D 車名浮動標籤與 CSS2DRenderer
-    this._updateLabels();
-    if (camera) {
-      this.labelRenderer.render(this.game.scene || this._findScene(), camera);
-    }
   }
 
-  _findScene() {
-    return this.game.track?.meshesGroup?.parent || null;
-  }
-
-  // 更新大廳資訊與玩家欄位
+  // 更新大廳資訊與 6.6 角色被動能力說明
   _updateLobby() {
     const roomInfo = this.game.roomInfo;
     const roomCodeEl = this.root.querySelector('#roomCode');
@@ -210,26 +230,20 @@ export class HUD {
     const roomQrEl = this.root.querySelector('#roomQr');
     const roomMsgEl = this.root.querySelector('#roomMsg');
 
-    if (roomCodeEl) {
-      roomCodeEl.textContent = roomInfo.code || '----';
-    }
+    if (roomCodeEl) roomCodeEl.textContent = roomInfo.code || '----';
     if (roomNoteEl) {
       roomNoteEl.textContent = roomInfo.code ? '用手機掃描或輸入房號加入' : '本機模式：第二階段開放手機加入';
     }
     if (roomQrEl) {
       if (roomInfo.qrSvg) {
         roomQrEl.style.display = 'block';
-        // innerHTML 僅插入本機伺服器端產生之 SVG 字串
         roomQrEl.innerHTML = roomInfo.qrSvg;
       } else {
         roomQrEl.style.display = 'none';
       }
     }
-    if (roomMsgEl) {
-      roomMsgEl.textContent = roomInfo.message || '';
-    }
+    if (roomMsgEl) roomMsgEl.textContent = roomInfo.message || '';
 
-    // 更新 4 個發車格位玩家資訊
     const slotsEl = this.root.querySelector('#playerSlots');
     if (!slotsEl) return;
 
@@ -245,17 +259,27 @@ export class HUD {
         const icon = human.kind === 'remote' ? '📱' : '⌨️';
         html += `
           <div class="player-slot joined" style="border-left: 6px solid ${kart.color}">
-            <span class="slot-icon">${icon}</span>
-            <span class="slot-name">${human.name}</span>
-            <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+            <div class="slot-main">
+              <span class="slot-icon">${icon}</span>
+              <span class="slot-name">${human.name}</span>
+              <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+            </div>
+            <div class="slot-ability">
+              <span class="char-title">${kart.character}</span>：${kart.ability}
+            </div>
           </div>
         `;
       } else {
         html += `
           <div class="player-slot ai-fallback" style="border-left: 6px solid ${kart.color}">
-            <span class="slot-icon">🤖</span>
-            <span class="slot-name">電腦補位</span>
-            <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+            <div class="slot-main">
+              <span class="slot-icon">🤖</span>
+              <span class="slot-name">電腦補位</span>
+              <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+            </div>
+            <div class="slot-ability">
+              <span class="char-title">${kart.character}</span>：${kart.ability}
+            </div>
           </div>
         `;
       }
@@ -271,63 +295,239 @@ export class HUD {
     this.countdownEl.textContent = val > 0 ? val.toString() : 'GO!';
   }
 
-  // 更新比賽中 HUD
-  _updateRacingHUD() {
-    // 1. 總時間
-    this.timerEl.textContent = formatTime(this.game.raceTime);
+  // 格式化名次序數大字（1st, 2nd, 3rd, 4th）
+  _formatOrdinal(pos) {
+    if (!pos) return '-';
+    if (pos === 1) return '1st';
+    if (pos === 2) return '2nd';
+    if (pos === 3) return '3rd';
+    return `${pos}th`;
+  }
 
-    // 2. 四角卡片
-    const racers = this.game.racers;
+  // 更新比賽中分割畫面每格 HUD 面板
+  _updateRacingHUD() {
+    this._updateLayout();
+
+    const viewRacers = this.game.viewRacers || [];
+    const count = Math.max(1, viewRacers.length);
+    const W = typeof window !== 'undefined' ? window.innerWidth : 1280;
+    const H = typeof window !== 'undefined' ? window.innerHeight : 720;
+    const rects = getViewportRects(count, W, H);
+
+    // 1 人時維持正上方中央全域計時器；2 人以上分割畫面不顯示全域計時器（改在每格左上面板顯示）
+    const isSplit = count >= 2;
+    if (isSplit) {
+      this.timerEl.style.display = 'none';
+    } else {
+      this.timerEl.style.display = 'block';
+      this.timerEl.textContent = formatTime(this.game.raceTime);
+    }
+
+    // 計算小地圖在畫面中央時的邊界矩形（供各格判斷角落貼合與面板動態避讓）
+    const hasCenterMinimap = (count === 2 || count === 4) && this.minimapCanvas.style.display !== 'none';
+    const mmW = this.minimapCanvas.width || 180;
+    const mmH = this.minimapCanvas.height || 110;
+    const mmRect = {
+      left: (W - mmW) / 2,
+      right: (W + mmW) / 2,
+      top: (H - mmH) / 2,
+      bottom: (H + mmH) / 2,
+    };
+
     const icons = ['⚡', '🍌', '🚀', '🛡️'];
 
+    // 依據 viewRacers 更新每一格追尾視角疊層面板
     for (let i = 0; i < CONFIG.MAX_PLAYERS; i++) {
-      const card = this.playerCards[i];
-      const racer = racers[i];
+      const panel = this.cellPanels[i];
+      const racer = viewRacers[i];
 
-      if (!racer || !racer.car) {
-        card.style.display = 'none';
+      if (!racer || !racer.car || i >= rects.length) {
+        panel.style.display = 'none';
         continue;
       }
-      card.style.display = 'block';
 
-      // 玩家姓名與名次
-      const nameEl = card.querySelector('.card-name');
-      const posEl = card.querySelector('.card-pos');
-      const lapEl = card.querySelector('.card-lap');
-      const iconEl = card.querySelector('.card-item-icon');
+      panel.style.display = 'block';
+      const r = rects[i];
+      panel.style.left = `${r.x}px`;
+      panel.style.top = `${r.top}px`;
+      panel.style.width = `${r.w}px`;
+      panel.style.height = `${r.h}px`;
 
-      if (nameEl) nameEl.textContent = racer.name;
-      if (posEl) posEl.textContent = `#${racer.position || '-'}`;
+      // 取得各角主要面板元件
+      const posLapEl = panel.querySelector('.cell-top-left');
+      const itemBoxEl = panel.querySelector('.cell-top-right');
+      const speedoEl = panel.querySelector('.cell-bottom-left');
 
-      if (lapEl) {
-        lapEl.textContent = racer.car.finished
-          ? '完賽'
-          : `圈數 ${racer.car.lap}/${CONFIG.LAPS}`;
+      // 幾何判斷：使用 getViewportRects 計算出的此格四角座標，比對是否貼齊中央小地圖矩形
+      const cellLeft = r.x;
+      const cellRight = r.x + r.w;
+      const cellTop = r.top;
+      const cellBottom = r.top + r.h;
+
+      const pointInRect = (px, py, rect) => (
+        px >= rect.left - 5 && px <= rect.right + 5 &&
+        py >= rect.top - 5 && py <= rect.bottom + 5
+      );
+
+      const centerTouchesTopLeft = hasCenterMinimap && pointInRect(cellLeft, cellTop, mmRect);
+      const centerTouchesTopRight = hasCenterMinimap && pointInRect(cellRight, cellTop, mmRect);
+      const centerTouchesBottomLeft = hasCenterMinimap && pointInRect(cellLeft, cellBottom, mmRect);
+      const centerTouchesBottomRight = hasCenterMinimap && pointInRect(cellRight, cellBottom, mmRect);
+
+      // 動態調整面板位置，避開貼齊畫面中央的角落
+      if (centerTouchesBottomLeft) {
+        // 右上格：左下角貼齊中心，原在左下角的速度表水平翻轉至右下角
+        if (posLapEl) {
+          posLapEl.style.top = '12px'; posLapEl.style.left = '12px';
+          posLapEl.style.right = 'auto'; posLapEl.style.bottom = 'auto';
+        }
+        if (itemBoxEl) {
+          itemBoxEl.style.top = '12px'; itemBoxEl.style.right = '12px';
+          itemBoxEl.style.left = 'auto'; itemBoxEl.style.bottom = 'auto';
+        }
+        if (speedoEl) {
+          speedoEl.style.bottom = '12px'; speedoEl.style.right = '12px';
+          speedoEl.style.left = 'auto'; speedoEl.style.top = 'auto';
+        }
+      } else if (centerTouchesTopRight) {
+        // 左下格：右上角貼齊中心，原在右上角的道具格水平翻轉至左上角，並堆疊於名次圈數下方
+        const stackTop = posLapEl?.offsetHeight ? `${12 + posLapEl.offsetHeight + 8}px` : '70px';
+        if (posLapEl) {
+          posLapEl.style.top = '12px'; posLapEl.style.left = '12px';
+          posLapEl.style.right = 'auto'; posLapEl.style.bottom = 'auto';
+        }
+        if (itemBoxEl) {
+          itemBoxEl.style.top = stackTop; itemBoxEl.style.left = '12px';
+          itemBoxEl.style.right = 'auto'; itemBoxEl.style.bottom = 'auto';
+        }
+        if (speedoEl) {
+          speedoEl.style.bottom = '12px'; speedoEl.style.left = '12px';
+          speedoEl.style.right = 'auto'; speedoEl.style.top = 'auto';
+        }
+      } else if (centerTouchesTopLeft) {
+        // 右下格：左上角貼齊中心，原在左上角的名次圈數水平翻轉至右上角，道具格堆疊於其下方
+        const stackTop = posLapEl?.offsetHeight ? `${12 + posLapEl.offsetHeight + 8}px` : '70px';
+        if (posLapEl) {
+          posLapEl.style.top = '12px'; posLapEl.style.right = '12px';
+          posLapEl.style.left = 'auto'; posLapEl.style.bottom = 'auto';
+        }
+        if (itemBoxEl) {
+          itemBoxEl.style.top = stackTop; itemBoxEl.style.right = '12px';
+          itemBoxEl.style.left = 'auto'; itemBoxEl.style.bottom = 'auto';
+        }
+        if (speedoEl) {
+          speedoEl.style.bottom = '12px'; speedoEl.style.left = '12px';
+          speedoEl.style.right = 'auto'; speedoEl.style.top = 'auto';
+        }
+      } else {
+        // 預設配置（左上格、單人、雙人或 3 人無中央小地圖時）
+        if (posLapEl) {
+          posLapEl.style.top = '12px'; posLapEl.style.left = '12px';
+          posLapEl.style.right = 'auto'; posLapEl.style.bottom = 'auto';
+        }
+        if (itemBoxEl) {
+          itemBoxEl.style.top = '12px'; itemBoxEl.style.right = '12px';
+          itemBoxEl.style.left = 'auto'; itemBoxEl.style.bottom = 'auto';
+        }
+        if (speedoEl) {
+          speedoEl.style.bottom = '12px'; speedoEl.style.left = '12px';
+          speedoEl.style.right = 'auto'; speedoEl.style.top = 'auto';
+        }
       }
 
-      // 道具格顯示與抽獎輪播效果
-      if (iconEl) {
+      const car = racer.car;
+
+      // 1. 名次、圈數與分割畫面獨立比賽時間
+      const posEl = panel.querySelector('.cell-pos');
+      const lapEl = panel.querySelector('.cell-lap');
+      const timeEl = panel.querySelector('.cell-time');
+      if (posEl) posEl.textContent = this._formatOrdinal(racer.position);
+      if (lapEl) {
+        lapEl.textContent = car.finished ? '完賽' : `LAP ${car.lap}/${CONFIG.LAPS}`;
+      }
+      if (timeEl) {
+        if (isSplit) {
+          timeEl.style.display = 'block';
+          timeEl.textContent = formatTime(this.game.raceTime);
+        } else {
+          timeEl.style.display = 'none';
+        }
+      }
+
+      // 2. 道具格（含升級星星 ★ / ★★ / ★★★）
+      const iconEl = panel.querySelector('.cell-item-icon');
+      const starsEl = panel.querySelector('.cell-item-stars');
+      if (iconEl && starsEl) {
         if (racer.rolling) {
-          // 輪播動畫
           const rollIndex = Math.floor(Date.now() / 80) % icons.length;
           iconEl.textContent = icons[rollIndex];
-          iconEl.className = 'card-item-icon rolling';
+          starsEl.textContent = '';
         } else if (racer.item && ITEMS[racer.item]) {
           iconEl.textContent = ITEMS[racer.item].icon;
-          iconEl.className = 'card-item-icon has-item';
+          const stars = racer.itemLevel === 3 ? '★★★' : racer.itemLevel === 2 ? '★★' : '★';
+          starsEl.textContent = stars;
         } else {
           iconEl.textContent = '';
-          iconEl.className = 'card-item-icon';
+          starsEl.textContent = '';
+        }
+      }
+
+      // 3. 速度表
+      const speedNumEl = panel.querySelector('.cell-speed-num');
+      const speedFillEl = panel.querySelector('.cell-speed-bar-fill');
+      const speedKmh = Math.max(0, Math.round(car.speed * 2.5));
+      if (speedNumEl) speedNumEl.textContent = speedKmh.toString();
+      if (speedFillEl) {
+        const pct = clamp((car.speed / CONFIG.BOOST_SPEED) * 100, 0, 100);
+        speedFillEl.style.width = `${pct}%`;
+      }
+
+      // 4. 甩尾火花集氣量表（藍 -> 橘 -> 紫）
+      const driftMeter = panel.querySelector('.cell-drift-meter');
+      const driftFill = panel.querySelector('.cell-drift-bar-fill');
+      if (driftMeter && driftFill) {
+        if (car.isDrifting && car.driftCharge > 0) {
+          driftMeter.style.display = 'block';
+          const chargePct = clamp((car.driftCharge / CONFIG.DRIFT_T3) * 100, 0, 100);
+          driftFill.style.width = `${chargePct}%`;
+
+          if (car.driftLevel === 3) {
+            driftFill.style.background = 'linear-gradient(90deg, #9b59b6, #e056fd)';
+          } else if (car.driftLevel === 2) {
+            driftFill.style.background = 'linear-gradient(90deg, #e67e22, #f39c12)';
+          } else {
+            driftFill.style.background = 'linear-gradient(90deg, #3498db, #00d2d3)';
+          }
+        } else {
+          driftMeter.style.display = 'none';
+        }
+      }
+
+      // 5. 受擊紅框閃爍
+      const flashEl = panel.querySelector('.cell-hit-flash');
+      if (flashEl) {
+        flashEl.style.display = (car.hitTimer > 0 || car.spinTimer > 0.8) ? 'block' : 'none';
+      }
+
+      // 6. 完賽大字徽章
+      const finishBadge = panel.querySelector('.cell-finish-badge');
+      if (finishBadge) {
+        if (car.finished) {
+          finishBadge.style.display = 'block';
+          finishBadge.textContent = `FINISH! 第 ${racer.rank || racer.position} 名`;
+        } else {
+          finishBadge.style.display = 'none';
         }
       }
     }
 
-    // 3. 繪製小地圖
+    // 7. 小地圖繪製
     this._renderMinimap();
   }
 
-  // 繪製動態小地圖（賽道軌道＋各車位置圓點）
+  // 繪製動態小地圖
   _renderMinimap() {
+    if (this.minimapCanvas.style.display === 'none') return;
     const canvas = this.minimapCanvas;
     const ctx = this.minimapCtx;
     const track = this.game.track;
@@ -336,12 +536,11 @@ export class HUD {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // 背景半透明黑
-    ctx.fillStyle = 'rgba(20, 20, 25, 0.7)';
-    ctx.roundRect ? ctx.roundRect(0, 0, canvas.width, canvas.height, 8) : ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(20, 24, 34, 0.75)';
+    ctx.roundRect ? ctx.roundRect(0, 0, canvas.width, canvas.height, 10) : ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fill();
 
-    // 繪製賽道路線
+    // 賽道線條
     ctx.beginPath();
     for (let i = 0; i < track.N; i++) {
       const p = track.points[i];
@@ -355,14 +554,14 @@ export class HUD {
     ctx.strokeStyle = '#4b6584';
     ctx.stroke();
 
-    // 繪製賽車位置圓點
+    // 賽車位置圓點
     for (const r of this.game.racers) {
       if (!r.car) continue;
       const cx = r.car.x * tf.scale + tf.offsetX;
       const cz = r.car.z * tf.scale + tf.offsetZ;
 
       ctx.beginPath();
-      ctx.arc(cx, cz, 4, 0, Math.PI * 2);
+      ctx.arc(cx, cz, 4.5, 0, Math.PI * 2);
       ctx.fillStyle = r.color || '#ffffff';
       ctx.fill();
       ctx.lineWidth = 1.5;
@@ -412,41 +611,6 @@ export class HUD {
     }
   }
 
-  // 更新車頭上方 3D 浮動姓名標籤
-  _updateLabels() {
-    if (this.game.state !== 'racing' && this.game.state !== 'countdown') {
-      // 非比賽狀態隱藏標籤
-      for (const label of this.carLabels.values()) {
-        label.visible = false;
-      }
-      return;
-    }
-
-    for (const r of this.game.racers) {
-      if (!r.car || !r.car.viewGroup) continue;
-
-      let labelObj = this.carLabels.get(r.id);
-      if (!labelObj) {
-        const div = document.createElement('div');
-        div.className = 'car-3d-label';
-        div.textContent = r.name;
-        div.style.borderColor = r.color;
-        labelObj = new CSS2DObject(div);
-        labelObj.position.set(0, 1.8, 0);
-        r.car.viewGroup.add(labelObj);
-        this.carLabels.set(r.id, labelObj);
-      }
-      labelObj.visible = true;
-    }
-  }
-
-  // 清除所有 3D 浮動姓名標籤 DOM 節點
-  clearLabels() {
-    for (const [id, labelObj] of this.carLabels.entries()) {
-      if (labelObj.parent) {
-        labelObj.parent.remove(labelObj);
-      }
-    }
-    this.carLabels.clear();
-  }
+  // 清空標籤（介面清理兼容函式）
+  clearLabels() {}
 }

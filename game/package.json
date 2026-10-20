@@ -1,7 +1,7 @@
 {
   "name": "kart-racer",
   "version": "1.0.0",
-  "description": "網頁 3D 道具賽車遊戲（第一階段：鍵盤版）",
+  "description": "網頁 3D 道具賽車遊戲（第一階段：鍵盤版 — 陸行鳥大賽車風格）",
   "type": "module",
   "private": true,
   "scripts": {

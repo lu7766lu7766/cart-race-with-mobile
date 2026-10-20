@@ -1,6 +1,6 @@
 // ============================================================
 //  input.js — 輸入抽象層（鍵盤輸入與空輸入）
-//  提供統一的 getState() -> { steer, throttle, brake, useItem } 介面，
+//  提供統一的 getState() -> { steer, throttle, brake, drift, useItem } 介面，
 //  使遊戲核心邏輯無縫支援鍵盤、AI 或未來的遠端手機輸入。
 //  本模組類別在 Node.js 中可正常 import，頂層不存取 window/document。
 // ============================================================
@@ -22,7 +22,6 @@ export class KeyboardInput {
   }
 
   _onKeyDown(e) {
-    // 忽略輸入框內的按鍵
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
       return;
     }
@@ -40,11 +39,12 @@ export class KeyboardInput {
     this.pressedKeys.delete(e.code);
   }
 
-  // 取得當前輸入狀態
+  // 取得當前輸入狀態（包含 6.3 甩尾按鍵）
   getState() {
     let throttle = 0;
     let brake = 0;
     let steer = 0;
+    let drift = false;
 
     if (this.layout) {
       const isPressed = (keys) => keys?.some((k) => this.pressedKeys.has(k)) ?? false;
@@ -56,15 +56,17 @@ export class KeyboardInput {
       const right = isPressed(this.layout.right);
       if (left && !right) steer = -1;
       else if (right && !left) steer = 1;
+
+      if (isPressed(this.layout.drift)) drift = true;
     }
 
     const useItem = this.itemTriggered;
-    this.itemTriggered = false; // 道具按鍵讀取後立即清空，確保只觸發一次
+    this.itemTriggered = false;
 
-    return { steer, throttle, brake, useItem };
+    return { steer, throttle, brake, drift, useItem };
   }
 
-  // 清空尚未讀取的道具觸發與按鍵（例如比賽開始 GO 時避免誤發）
+  // 清空尚未讀取的道具觸發與按鍵
   reset() {
     this.itemTriggered = false;
     this.pressedKeys.clear();
@@ -84,7 +86,7 @@ export class KeyboardInput {
 // 空輸入類別（預設或斷線時使用）
 export class NullInput {
   getState() {
-    return { steer: 0, throttle: 0, brake: 0, useItem: false };
+    return { steer: 0, throttle: 0, brake: 0, drift: false, useItem: false };
   }
   reset() {}
   destroy() {}
