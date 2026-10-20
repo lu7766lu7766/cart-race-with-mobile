@@ -375,3 +375,53 @@ test('車碰車 Lv3 衝撞判定：護盾阻擋衝撞（不觸發 playerHit）�
   assert.equal(hitEvents[0].player.id, racerB.id);
   assert.equal(hitEvents[0].by, racerA.id);
 });
+
+test('真人完賽回大廳再開賽：player.input 維持原物件不被 AIInput 覆寫，且第二場能正常驅動車輛', () => {
+  const game = new Game({ headless: true, rng: mulberry32(1) });
+  const originalInput = {
+    getState: () => ({ steer: 0, throttle: 1, brake: 0, drift: false, useItem: false }),
+  };
+  const p1 = game.addPlayer({ name: '測試真人', kind: 'remote', input: originalInput });
+  game.startRace();
+
+  // 跳過倒數進入 racing
+  for (let i = 0; i < 185; i++) game.step(1 / 60);
+  assert.equal(game.state, 'racing');
+
+  const racer1 = game.racers.find((r) => r.id === p1.id);
+  // 模擬完賽：lapsDone 每步都會由 progress 重新計算，所以改設 progress，
+  // 讓車子停在終點線前 1 個取樣點，再往前開幾步跨過終點線
+  racer1.car.progress = CONFIG.LAPS * game.track.N - 1;
+  racer1.car.maxLapsDone = CONFIG.LAPS - 1;
+  for (let i = 0; i < 60 && !racer1.car.finished; i++) game.step(1 / 60);
+  assert.ok(racer1.car.finished, '玩家 1 應已完賽');
+  assert.ok(racer1.autoInput, '完賽後應有 autoInput 接手');
+  assert.equal(racer1.input, originalInput, '完賽後 racer1.input 仍應為原本的 input 物件');
+  assert.equal(p1.input, originalInput, '完賽後 p1.input 仍應為原本的 input 物件');
+
+  // 返回大廳
+  game.backToLobby();
+  assert.equal(game.state, 'lobby');
+  assert.equal(p1.input, originalInput, '回大廳後 p1.input 仍應為原本的 input 物件');
+  assert.equal(p1.autoInput, null, '回大廳後 autoInput 應被清空');
+
+  // 再開第二場
+  game.startRace();
+  assert.equal(game.state, 'countdown');
+  const racer1Round2 = game.racers.find((r) => r.id === p1.id);
+  assert.equal(racer1Round2.input, originalInput, '第二場 racer.input 仍為原本的 input');
+  assert.equal(racer1Round2.autoInput, null, '第二場 autoInput 為 null');
+
+  // 進入第二場 racing
+  for (let i = 0; i < 185; i++) game.step(1 / 60);
+  assert.equal(game.state, 'racing');
+
+  const initialProgress = racer1Round2.car.progress;
+  // 模擬 2 秒（120 步）
+  for (let i = 0; i < 120; i++) game.step(1 / 60);
+
+  assert.ok(
+    racer1Round2.car.progress > initialProgress + 30,
+    `第二場由 originalInput (throttle: 1) 驅動，2 秒後 progress 應顯著增加（起點 ${initialProgress} -> 目前 ${racer1Round2.car.progress}）`
+  );
+});

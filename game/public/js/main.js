@@ -139,6 +139,8 @@ async function bootstrap() {
   const keyboardPlayers = new Map();
 
   window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+
     const state = game.state;
 
     if (state === 'lobby') {
@@ -151,7 +153,11 @@ async function bootstrap() {
             kind: 'keyboard',
             input,
           });
-          if (p) keyboardPlayers.set('arrows', p);
+          if (p) {
+            keyboardPlayers.set('arrows', p);
+          } else {
+            input.destroy();
+          }
         }
       }
 
@@ -174,7 +180,11 @@ async function bootstrap() {
             kind: 'keyboard',
             input,
           });
-          if (p) keyboardPlayers.set('wasd', p);
+          if (p) {
+            keyboardPlayers.set('wasd', p);
+          } else {
+            input.destroy();
+          }
         }
       }
 
@@ -197,7 +207,11 @@ async function bootstrap() {
             kind: 'keyboard',
             input,
           });
-          if (p) keyboardPlayers.set('arrows', p);
+          if (p) {
+            keyboardPlayers.set('arrows', p);
+          } else {
+            input.destroy();
+          }
         }
         game.startRace();
       }

@@ -619,12 +619,12 @@ export class ItemSystem {
       let mesh = this.missileMeshes.get(missile.id);
       if (!mesh) {
         const mGeo = new THREE.ConeGeometry(0.3, 1.2, 8);
+        mGeo.rotateX(Math.PI / 2);
         const mMat = new THREE.MeshStandardMaterial({
           color: missile.homing ? 0x9b59b6 : 0xe74c3c,
           roughness: 0.3,
         });
         mesh = new THREE.Mesh(mGeo, mMat);
-        mesh.rotation.x = Math.PI / 2;
         mesh.castShadow = true;
         this.viewGroup.add(mesh);
         this.missileMeshes.set(missile.id, mesh);

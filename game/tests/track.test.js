@@ -203,3 +203,43 @@ test('所有取樣點 height 均大於等於 0（無負值高度）', () => {
   );
 });
 
+test('路面、路肩、草地帶、裙邊網格的所有三角形面法線 y > 0（頂點繞向正確向上）', () => {
+  const track = new Track();
+  const fakeScene = { add() {}, remove() {} };
+  track.buildMeshes(fakeScene, null);
+
+  const targets = [
+    { name: '路面', mesh: track.meshesGroup.getObjectByName('roadMesh') },
+    { name: '路肩', mesh: track.meshesGroup.getObjectByName('curbMesh') },
+    { name: '草地帶', mesh: track.meshesGroup.getObjectByName('shoulderMesh') },
+    { name: '裙邊', mesh: track.meshesGroup.getObjectByName('skirtMesh') },
+  ];
+
+  for (const { name, mesh } of targets) {
+    assert.ok(mesh, `應找到 ${name} 網格`);
+    const geo = mesh.geometry;
+    const pos = geo.getAttribute('position');
+    const index = geo.getIndex();
+    assert.ok(pos && index, `${name} 幾何體應具備 position 與 index`);
+
+    for (let i = 0; i < index.count; i += 3) {
+      const iA = index.getX(i);
+      const iB = index.getX(i + 1);
+      const iC = index.getX(i + 2);
+
+      const ax = pos.getX(iA), ay = pos.getY(iA), az = pos.getZ(iA);
+      const bx = pos.getX(iB), by = pos.getY(iB), bz = pos.getZ(iB);
+      const cx = pos.getX(iC), cy = pos.getY(iC), cz = pos.getZ(iC);
+
+      const abx = bx - ax, aby = by - ay, abz = bz - az;
+      const acx = cx - ax, acy = cy - ay, acz = cz - az;
+
+      const ny = abz * acx - abx * acz;
+      assert.ok(
+        ny > 0,
+        `${name} 第 ${i / 3} 個三角形面法線 y 應 > 0（實際為 ${ny}），頂點繞向相反被剔除`
+      );
+    }
+  }
+});
+

@@ -91,10 +91,11 @@ export class Game extends Emitter {
 
       // 6.3 起跑衝刺輸入邊緣檢測（rising edge: 上一步 <= 0.5，這一步 > 0.5）
       for (const racer of this.racers) {
-        if (!racer.input) continue;
+        const activeInput = racer.autoInput ?? racer.input;
+        if (!activeInput) continue;
         let rawThrottle = 0;
         try {
-          rawThrottle = racer.input.getState?.()?.throttle ?? 0;
+          rawThrottle = activeInput.getState?.()?.throttle ?? 0;
         } catch (e) {}
         const currT = clamp(rawThrottle, 0, 1);
 
@@ -167,10 +168,11 @@ export class Game extends Emitter {
     for (const racer of this.racers) {
       if (!racer.car) continue;
 
+      const activeInput = racer.autoInput ?? racer.input;
       let rawInput = { steer: 0, throttle: 0, brake: 0, drift: false, useItem: false };
       try {
-        if (racer.input && typeof racer.input.getState === 'function') {
-          rawInput = racer.input.getState() || rawInput;
+        if (activeInput && typeof activeInput.getState === 'function') {
+          rawInput = activeInput.getState() || rawInput;
         }
       } catch (err) {
         console.error(`讀取玩家 ${racer.name} 輸入時發生錯誤：`, err);
@@ -299,8 +301,8 @@ export class Game extends Emitter {
           const finishedRank = this.racers.filter((r) => r.car && r.car.finished).length;
           racer.rank = finishedRank;
 
-          // 完賽後由慢速 AI 接手巡航
-          racer.input = new AIInput({
+          // 完賽後由慢速 AI 接手巡航（保存在 autoInput，不覆寫真人玩家原本的 input）
+          racer.autoInput = new AIInput({
             car,
             game: this,
             rng: this.rng,
@@ -415,6 +417,7 @@ export class Game extends Emitter {
       slot,
       color: kartInfo.color,
       input: input || new NullInput(),
+      autoInput: null,
       car: null,
       inRace,
       position: null,
@@ -443,12 +446,14 @@ export class Game extends Emitter {
       if (racer) {
         racer.kind = 'ai';
         racer.name = `${racer.name}(AI)`;
+        racer.autoInput = null;
         if (racer.car) {
           racer.input = new AIInput({
             car: racer.car,
             game: this,
             rng: this.rng,
           });
+          racer.car.updateNameLabel?.(racer.name, racer.color);
         }
       }
     }
@@ -509,7 +514,7 @@ export class Game extends Emitter {
 
     this.racers = [];
 
-    // 1. 將目前已加入的真人標記為 inRace = true
+    // 1. 將目前已加入的真人標記為 inRace = true，並清空完賽巡航 autoInput
     const humanList = this.getPlayers();
     for (const human of humanList) {
       human.inRace = true;
@@ -519,6 +524,7 @@ export class Game extends Emitter {
       human.rollingTimer = 0;
       human.position = null;
       human.rank = null;
+      human.autoInput = null;
       this.racers.push(human);
     }
 
@@ -535,6 +541,7 @@ export class Game extends Emitter {
           slot,
           color: kartInfo.color,
           input: null,
+          autoInput: null,
           car: null,
           inRace: true,
           position: null,
@@ -587,7 +594,12 @@ export class Game extends Emitter {
     this.itemSystem.reset();
     this.collisionCooldowns.clear();
 
-    // 6. 設定倒數並切換狀態
+    // 6. 設定倒數與初始名次（依發車位 slot 排序，使倒數期間 getStatus 即可取得名次）
+    const initialOrder = [...this.racers].sort((a, b) => a.slot - b.slot);
+    for (let i = 0; i < initialOrder.length; i++) {
+      initialOrder[i].position = i + 1;
+    }
+
     this.countdownTimer = 0;
     this.countdownValue = 3;
     this._state = 'countdown';
@@ -620,6 +632,7 @@ export class Game extends Emitter {
       human.rollingTimer = 0;
       human.position = null;
       human.rank = null;
+      human.autoInput = null;
     }
 
     this._state = 'lobby';

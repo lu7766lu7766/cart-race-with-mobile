@@ -564,6 +564,33 @@ export class Car {
     }
   }
 
+  // 更新車頂浮動姓名標籤（當斷線轉為 AI 或名字變更時重新繪製貼圖）
+  updateNameLabel(newName, colorHex = null) {
+    if (!this.nameSprite || typeof document === 'undefined') return;
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(20, 24, 34, 0.85)';
+    ctx.roundRect ? ctx.roundRect(4, 4, 248, 56, 16) : ctx.fillRect(4, 4, 248, 56);
+    ctx.fill();
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = colorHex || this.player?.color || '#ffffff';
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(newName, 128, 32);
+
+    const oldMap = this.nameSprite.material?.map;
+    const newTex = new THREE.CanvasTexture(canvas);
+    this.nameSprite.material.map = newTex;
+    this.nameSprite.material.needsUpdate = true;
+    oldMap?.dispose?.();
+  }
+
   // 銷毀 3D 視覺物件（逐一釋放自行 new 出的幾何體、材質與貼圖，共用 GLB 資源不 dispose）
   detachView() {
     if (this.colorRing) {

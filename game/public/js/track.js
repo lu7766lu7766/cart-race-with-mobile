@@ -341,12 +341,12 @@ export class Track {
       skirtPositions.push(srx, -0.05, srz);
 
       if (i < this.N) {
-        // 左裙邊
-        skirtIndices.push(skirtV, skirtV + 1, skirtV + 4);
-        skirtIndices.push(skirtV + 1, skirtV + 5, skirtV + 4);
-        // 右裙邊
-        skirtIndices.push(skirtV + 2, skirtV + 6, skirtV + 3);
-        skirtIndices.push(skirtV + 3, skirtV + 6, skirtV + 7);
+        // 左裙邊（朝 +Y）
+        skirtIndices.push(skirtV, skirtV + 4, skirtV + 1);
+        skirtIndices.push(skirtV + 1, skirtV + 4, skirtV + 5);
+        // 右裙邊（朝 +Y）
+        skirtIndices.push(skirtV + 2, skirtV + 3, skirtV + 6);
+        skirtIndices.push(skirtV + 3, skirtV + 7, skirtV + 6);
       }
     }
 
@@ -361,6 +361,7 @@ export class Track {
       roughness: 0.8,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
+    roadMesh.name = 'roadMesh';
     roadMesh.receiveShadow = true;
     this.meshesGroup.add(roadMesh);
 
@@ -376,6 +377,7 @@ export class Track {
       roughness: 0.8,
     });
     const curbMesh = new THREE.Mesh(curbGeo, curbMat);
+    curbMesh.name = 'curbMesh';
     curbMesh.receiveShadow = true;
     this.meshesGroup.add(curbMesh);
 
@@ -390,6 +392,7 @@ export class Track {
       roughness: 0.9,
     });
     const shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
+    shoulderMesh.name = 'shoulderMesh';
     shoulderMesh.receiveShadow = true;
     this.meshesGroup.add(shoulderMesh);
 
@@ -404,6 +407,7 @@ export class Track {
       roughness: 0.9,
     });
     const skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
+    skirtMesh.name = 'skirtMesh';
     skirtMesh.receiveShadow = true;
     this.meshesGroup.add(skirtMesh);
 
