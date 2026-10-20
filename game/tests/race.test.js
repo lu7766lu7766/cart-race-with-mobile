@@ -7,9 +7,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Game } from '../public/js/game.js';
-import { CONFIG } from '../public/js/config.js';
+import { CONFIG, KEYBOARD_LAYOUTS } from '../public/js/config.js';
 import { mulberry32 } from '../public/js/utils.js';
 import { AIInput } from '../public/js/ai.js';
+import { KeyboardInput } from '../public/js/input.js';
 
 test('只有 AI 的比賽（seeds 1, 2, 7）：400 秒內完賽，每圈 < 70 秒，每台車觸發 lapChanged 恰為 LAPS - 1 次，三場合計至少發生過一次道具升級 (level >= 2)', () => {
   const testSeeds = [1, 2, 7];
@@ -424,4 +425,40 @@ test('真人完賽回大廳再開賽：player.input 維持原物件不被 AIInpu
     racer1Round2.car.progress > initialProgress + 30,
     `第二場由 originalInput (throttle: 1) 驅動，2 秒後 progress 應顯著增加（起點 ${initialProgress} -> 目前 ${racer1Round2.car.progress}）`
   );
+});
+
+test('鍵盤道具鍵防重複觸發：repeat:true 不觸發 useItem，repeat:false 觸發且只出現一次', () => {
+  const listeners = new Map();
+  const fakeTarget = {
+    addEventListener(name, fn) {
+      if (!listeners.has(name)) listeners.set(name, []);
+      listeners.get(name).push(fn);
+    },
+    removeEventListener(name, fn) {
+      if (listeners.has(name)) {
+        const list = listeners.get(name).filter((f) => f !== fn);
+        listeners.set(name, list);
+      }
+    },
+    dispatch(name, event) {
+      const list = listeners.get(name) || [];
+      for (const fn of list) fn(event);
+    },
+  };
+
+  const layout = KEYBOARD_LAYOUTS[0];
+  const input = new KeyboardInput(layout, fakeTarget);
+
+  // 1. 模擬長按 Enter 產生的 repeat: true 事件
+  fakeTarget.dispatch('keydown', { code: 'Enter', repeat: true });
+  assert.equal(input.getState().useItem, false, 'repeat: true 的 keydown 事件不得觸發 useItem');
+
+  // 2. 模擬首次按下 Enter（repeat: false）
+  fakeTarget.dispatch('keydown', { code: 'Enter', repeat: false });
+  assert.equal(input.getState().useItem, true, 'repeat: false 的 keydown 事件應觸發 useItem: true');
+
+  // 3. 讀取過後再次 getState()，useItem 應已被清除為 false（單次觸發保證）
+  assert.equal(input.getState().useItem, false, 'useItem 讀取後應自動重設為 false，不得殘留');
+
+  input.destroy();
 });

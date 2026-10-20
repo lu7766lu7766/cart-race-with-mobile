@@ -13,6 +13,8 @@ export class HUD {
     this.container = container;
     this.game = game;
     this._lastQr = null;
+    this._lastSlotsHtml = null;
+    this._lastResultsHtml = null;
 
     // 建立 DOM 介面元素結構
     this._createDOM();
@@ -293,8 +295,9 @@ export class HUD {
         `;
       }
     }
-    if (slotsEl.innerHTML !== html) {
+    if (this._lastSlotsHtml !== html) {
       slotsEl.innerHTML = html;
+      this._lastSlotsHtml = html;
     }
   }
 
@@ -614,8 +617,9 @@ export class HUD {
       `;
     }
 
-    if (tbody.innerHTML !== rowsHtml) {
+    if (this._lastResultsHtml !== rowsHtml) {
       tbody.innerHTML = rowsHtml;
+      this._lastResultsHtml = rowsHtml;
     }
 
     if (cdEl) {
@@ -624,6 +628,9 @@ export class HUD {
     }
   }
 
-  // 清空標籤（介面清理兼容函式）
-  clearLabels() {}
+  // 清空標籤與 HTML 快取
+  clearLabels() {
+    this._lastSlotsHtml = null;
+    this._lastResultsHtml = null;
+  }
 }

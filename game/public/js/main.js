@@ -114,7 +114,13 @@ async function bootstrap() {
   const hud = new HUD(hudContainer, game);
   const audio = new SoundSystem();
 
-  game.on('sound', (type) => audio.play(type));
+  game.on('sound', (event) => {
+    if (typeof event === 'string') {
+      audio.play(event);
+    } else if (event && event.type) {
+      audio.play(event.type, event);
+    }
+  });
 
   // 8. 狀態切換時動態掛載/卸載車輛 3D 視覺
   game.on('stateChanged', ({ state }) => {
@@ -263,6 +269,16 @@ async function bootstrap() {
 
     game.itemSystem.syncView(realDt);
     hud.update();
+
+    // 檢查是否有任何真人的車正在甩尾播放摩擦聲（非比賽狀態一律 off）
+    if (game.state === 'racing') {
+      const anyHumanDrifting = game.racers.some(
+        (r) => r.kind !== 'ai' && r.car && r.car.isDrifting
+      );
+      audio.setDrifting(anyHumanDrifting);
+    } else {
+      audio.setDrifting(false);
+    }
 
     // 6.1: 陰影每幀只更新一次
     renderer.shadowMap.needsUpdate = true;

@@ -29,6 +29,9 @@ export class KeyboardInput {
     const code = e.code;
     this.pressedKeys.add(code);
 
+    // 道具鍵防按鍵重複觸發（長按只觸發一次，避免吃到道具瞬間自動用掉）
+    if (e.repeat) return;
+
     // 檢查是否按下道具鍵（單次觸發）
     if (this.layout?.item?.includes(code)) {
       this.itemTriggered = true;

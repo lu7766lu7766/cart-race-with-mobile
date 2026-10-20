@@ -146,14 +146,14 @@ export class ItemSystem {
             // 手上無道具：開始抽獎 Lv1
             racer.rolling = true;
             racer.rollingTimer = CONFIG.ITEM_ROLL_TIME;
-            if (this.game) this.game.emit('sound', 'box');
+            if (this.game) this.game.emit('sound', { type: 'box' });
           } else {
             // 手上已有道具：魔石升級（最多 Lv3）
             if (racer.itemLevel < 3) {
               racer.itemLevel = Math.min(3, (racer.itemLevel || 1) + 1);
               if (this.game) {
                 this.game.emit('itemChanged', { player: racer, item: racer.item, level: racer.itemLevel });
-                this.game.emit('sound', 'upgrade');
+                this.game.emit('sound', { type: 'upgrade' });
               }
             }
           }
@@ -200,7 +200,7 @@ export class ItemSystem {
           if (wasSpun) {
             if (this.game) {
               this.game.emit('playerHit', { player: racer, by: banana.ownerPlayerId });
-              this.game.emit('sound', 'spin');
+              this.game.emit('sound', { type: 'spin' });
             }
           }
           break;
@@ -266,7 +266,7 @@ export class ItemSystem {
           const wasHit = car.hitByMissile(missile.ownerPlayerId);
           if (wasHit && this.game) {
             this.game.emit('playerHit', { player: racer, by: missile.ownerPlayerId });
-            this.game.emit('sound', 'hit');
+            this.game.emit('sound', { type: 'hit' });
           }
           break;
         }
@@ -307,23 +307,23 @@ export class ItemSystem {
         const times = CONFIG.ITEM_LEVELS.nitro;
         const duration = times[level - 1] || times[0];
         car.applyBoost(duration, level);
-        if (this.game) this.game.emit('sound', 'boost');
+        if (this.game) this.game.emit('sound', { type: 'boost' });
         break;
       }
       case 'shield': {
         const times = CONFIG.ITEM_LEVELS.shield;
         const duration = times[level - 1] || times[0];
         car.applyShield(duration, level);
-        if (this.game) this.game.emit('sound', 'shield');
+        if (this.game) this.game.emit('sound', { type: 'shield' });
         break;
       }
       case 'banana':
         this._spawnBanana(racer, level);
-        if (this.game) this.game.emit('sound', 'drop');
+        if (this.game) this.game.emit('sound', { type: 'drop' });
         break;
       case 'missile':
         this._spawnMissile(racer, level);
-        if (this.game) this.game.emit('sound', 'missile');
+        if (this.game) this.game.emit('sound', { type: 'missile' });
         break;
     }
   }
@@ -562,16 +562,60 @@ export class ItemSystem {
       this.boxMeshes.set(box.id, mesh);
     }
 
-    // 建立加速板 3D 網格
+    // 建立加速板 3D 網格與箭頭貼圖
+    let padTex = null;
+    if (typeof document !== 'undefined') {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 180;
+      const ctx = canvas.getContext('2d');
+
+      // 黃底
+      ctx.fillStyle = '#f1c40f';
+      ctx.fillRect(0, 0, 128, 180);
+
+      // 外框深橘色
+      ctx.strokeStyle = '#d35400';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, 122, 174);
+
+      // 繪製指向前進方向（底端 +Z）的 V 形箭頭（白色主體 + 橘色內襯）
+      const drawChevron = (centerY, color, width) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(28, centerY - 22);
+        ctx.lineTo(64, centerY + 18);
+        ctx.lineTo(100, centerY - 22);
+        ctx.stroke();
+      };
+
+      // 雙層 V 形箭頭
+      drawChevron(60, '#ffffff', 14);
+      drawChevron(60, '#e67e22', 8);
+
+      drawChevron(120, '#ffffff', 14);
+      drawChevron(120, '#e67e22', 8);
+
+      padTex = new THREE.CanvasTexture(canvas);
+    }
+
     const padGeo = new THREE.PlaneGeometry(3.6, 5.0);
     const padMat = new THREE.MeshBasicMaterial({
-      color: 0xf1c40f,
+      map: padTex,
+      color: padTex ? 0xffffff : 0xf1c40f,
       side: THREE.DoubleSide,
     });
+    this.padGeo = padGeo;
+    this.padMat = padMat;
+
     for (const pad of this.pads) {
       const padMesh = new THREE.Mesh(padGeo, padMat);
+      padMesh.rotation.order = 'YXZ';
+      padMesh.rotation.y = pad.heading;
       padMesh.rotation.x = -Math.PI / 2;
-      padMesh.rotation.z = -pad.heading;
       padMesh.position.set(pad.x, pad.y + 0.02, pad.z);
       this.viewGroup.add(padMesh);
     }
@@ -643,6 +687,15 @@ export class ItemSystem {
     for (const mesh of this.missileMeshes.values()) {
       mesh.geometry?.dispose?.();
       mesh.material?.dispose?.();
+    }
+    if (this.padMat) {
+      this.padMat.map?.dispose?.();
+      this.padMat.dispose?.();
+      this.padMat = null;
+    }
+    if (this.padGeo) {
+      this.padGeo.dispose?.();
+      this.padGeo = null;
     }
     if (this.viewGroup && this.viewGroup.parent) {
       this.viewGroup.parent.remove(this.viewGroup);

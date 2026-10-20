@@ -12,10 +12,15 @@ export class SoundSystem {
     this.muted = false;
     this.unlocked = false;
 
+    // 持續性音效節點（甩尾摩擦聲）
+    this.driftOsc = null;
+    this.driftGain = null;
+    this.driftFilter = null;
+
     this._initUserInteractionUnlock();
   }
 
-  // 監聽首次使用者點擊/按鍵以解鎖 AudioContext
+  // 監聽首次使用者點擊/按鍵以解鎖 AudioContext，並註冊永久 M 鍵靜音監聽
   _initUserInteractionUnlock() {
     if (typeof window === 'undefined') return;
 
@@ -31,27 +36,85 @@ export class SoundSystem {
       }
       this.unlocked = true;
 
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onUnlockKey);
       window.removeEventListener('click', unlock);
       window.removeEventListener('touchstart', unlock);
     };
 
-    const onKeyDown = (e) => {
-      if (e.code === 'KeyM') {
-        this.toggleMute();
-      }
+    const onUnlockKey = () => {
       unlock();
     };
 
-    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onUnlockKey);
     window.addEventListener('click', unlock);
     window.addEventListener('touchstart', unlock);
+
+    // 永久監聽 M 鍵以切換靜音（防止首次解鎖後事件監聽被移除導致 M 鍵失效）
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if (e.code === 'KeyM') {
+        this.toggleMute();
+      }
+    });
   }
 
   // 切換靜音開關
   toggleMute() {
     this.muted = !this.muted;
+    if (this.muted && this.driftGain && this.ctx) {
+      try {
+        this.driftGain.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+      } catch (e) {}
+    }
     console.log(`[Audio] 靜音狀態：${this.muted ? '已靜音' : '開啟聲音'}`);
+  }
+
+  // 初始化甩尾摩擦音效節點（帶通濾波鋸齒波）
+  _initDriftSound() {
+    if (!this.ctx || this.driftGain) return;
+    try {
+      this.driftOsc = this.ctx.createOscillator();
+      this.driftOsc.type = 'sawtooth';
+      this.driftOsc.frequency.setValueAtTime(140, this.ctx.currentTime);
+
+      this.driftFilter = this.ctx.createBiquadFilter();
+      this.driftFilter.type = 'bandpass';
+      this.driftFilter.frequency.setValueAtTime(800, this.ctx.currentTime);
+      this.driftFilter.Q.setValueAtTime(3.0, this.ctx.currentTime);
+
+      this.driftGain = this.ctx.createGain();
+      this.driftGain.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+
+      this.driftOsc.connect(this.driftFilter);
+      this.driftFilter.connect(this.driftGain);
+      this.driftGain.connect(this.ctx.destination);
+
+      this.driftOsc.start();
+    } catch (e) {
+      console.warn('Drift sound init failed:', e);
+    }
+  }
+
+  // 設定甩尾摩擦聲開關（on 時平滑淡入，off 時平滑淡出）
+  setDrifting(on) {
+    if (this.muted || !this.ctx || this.ctx.state !== 'running') {
+      if (this.driftGain && this.ctx) {
+        try {
+          this.driftGain.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+        } catch (e) {}
+      }
+      return;
+    }
+
+    if (!this.driftGain) {
+      this._initDriftSound();
+    }
+    if (!this.driftGain) return;
+
+    const now = this.ctx.currentTime;
+    this.driftGain.gain.cancelScheduledValues(now);
+    const targetGain = on ? 0.08 : 0.0001;
+    this.driftGain.gain.setTargetAtTime(targetGain, now, 0.05);
   }
 
   // 播放合成音效
@@ -77,10 +140,14 @@ export class SoundSystem {
         case 'boost':
           this._playSweep(200, 800, 0.4, 'sawtooth');
           break;
-        case 'mini_turbo':
-          // 迷你加速音效
-          this._playSweep(300, 950, 0.35, 'sawtooth');
+        case 'mini_turbo': {
+          // 迷你加速音效：依 level 1/2/3 提高起始與結束頻率
+          const lvl = (extra && extra.level) ? extra.level : 1;
+          const startFreq = 260 + lvl * 70; // 330, 400, 470
+          const endFreq = 800 + lvl * 180;  // 980, 1160, 1340
+          this._playSweep(startFreq, endFreq, 0.35, 'sawtooth');
           break;
+        }
         case 'jump':
           // 跳台起飛音效
           this._playSweep(240, 600, 0.25, 'sine');

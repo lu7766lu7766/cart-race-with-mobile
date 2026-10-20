@@ -390,6 +390,7 @@ export class Car {
 
     this.viewGroup = new THREE.Group();
     this.viewGroup.name = `car_${this.slot}`;
+    this.viewGroup.rotation.order = 'YXZ';
 
     // 1. 車輛模型本體
     let model = null;
@@ -504,8 +505,8 @@ export class Car {
     this.viewGroup.rotation.y = this.heading + this.visualDriftYaw + (CONFIG.KART_YAW_OFFSET || 0);
     this.viewGroup.rotation.x = this.pitchAngle;
 
-    // 轉向時側傾
-    const roll = this.steerAngle * clamp(Math.abs(this.speed) / CONFIG.MAX_SPEED, 0, 1) * 0.18;
+    // 轉向時車身往外側傾（從車後看，右轉時車身往外側傾）
+    const roll = -this.steerAngle * clamp(Math.abs(this.speed) / CONFIG.MAX_SPEED, 0, 1) * 0.18;
     this.viewGroup.rotation.z = roll;
 
     // 前輪轉向角與四輪滾動

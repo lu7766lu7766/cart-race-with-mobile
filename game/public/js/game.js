@@ -86,8 +86,14 @@ export class Game extends Emitter {
     // 1. 狀態機時序邏輯
     // --------------------------------------------------------
     if (this._state === 'countdown') {
+      const prevVal = this.countdownValue;
       this.countdownTimer += dt;
       this.countdownValue = Math.max(1, 3 - Math.floor(this.countdownTimer));
+
+      // 倒數數字改變（3->2->1）時播放音效
+      if (this.countdownValue !== prevVal && this.countdownTimer < 3.0) {
+        this.emit('sound', { type: 'countdown' });
+      }
 
       // 6.3 起跑衝刺輸入邊緣檢測（rising edge: 上一步 <= 0.5，這一步 > 0.5）
       for (const racer of this.racers) {
@@ -142,7 +148,7 @@ export class Game extends Emitter {
         }
 
         this.emit('stateChanged', { state: 'racing' });
-        this.emit('sound', 'go');
+        this.emit('sound', { type: 'go' });
       }
       return;
     }
@@ -242,7 +248,7 @@ export class Game extends Emitter {
               if (hitSuccess) {
                 this.collisionCooldowns.set(hitKey, 0.5);
                 this.emit('playerHit', { player: racerB, by: racerA.id });
-                this.emit('sound', 'spin');
+                this.emit('sound', { type: 'spin' });
               }
             }
           }
@@ -254,7 +260,7 @@ export class Game extends Emitter {
               if (hitSuccess) {
                 this.collisionCooldowns.set(hitKey, 0.5);
                 this.emit('playerHit', { player: racerA, by: racerB.id });
-                this.emit('sound', 'spin');
+                this.emit('sound', { type: 'spin' });
               }
             }
           }
@@ -272,7 +278,7 @@ export class Game extends Emitter {
             carA.speed *= 0.85;
             carB.speed *= 0.85;
             this.collisionCooldowns.set(pairKey, 0.3);
-            this.emit('sound', 'bump');
+            this.emit('sound', { type: 'bump' });
           }
         }
       }
@@ -293,7 +299,7 @@ export class Game extends Emitter {
 
         if (car.lapsDone < CONFIG.LAPS) {
           this.emit('lapChanged', { player: racer, lap: car.lapsDone + 1 });
-          this.emit('sound', 'lap');
+          this.emit('sound', { type: 'lap' });
         } else {
           car.finished = true;
           car.finishTime = this.raceTime;
@@ -314,7 +320,7 @@ export class Game extends Emitter {
             rank: racer.rank,
             time: car.finishTime,
           });
-          this.emit('sound', 'finished');
+          this.emit('sound', { type: 'finished' });
         }
       }
     }
@@ -391,7 +397,7 @@ export class Game extends Emitter {
     }
 
     this.emit('stateChanged', { state: 'results' });
-    this.emit('sound', 'race_over');
+    this.emit('sound', { type: 'race_over' });
   }
 
   // 加入真人玩家（鍵盤或遠端手機）
@@ -566,10 +572,10 @@ export class Game extends Emitter {
         player: racer,
         onEvent: (name, data) => {
           this.emit(name, { player: racer, ...data });
-          if (name === 'miniTurbo') this.emit('sound', 'mini_turbo');
-          else if (name === 'jumped') this.emit('sound', 'jump');
-          else if (name === 'landed') this.emit('sound', 'land');
-          else if (name === 'wallHit') this.emit('sound', 'wall');
+          if (name === 'miniTurbo') this.emit('sound', { type: 'mini_turbo', level: data?.level || 1 });
+          else if (name === 'jumped') this.emit('sound', { type: 'jump' });
+          else if (name === 'landed') this.emit('sound', { type: 'land' });
+          else if (name === 'wallHit') this.emit('sound', { type: 'wall' });
         },
       });
 
@@ -605,7 +611,7 @@ export class Game extends Emitter {
     this._state = 'countdown';
 
     this.emit('stateChanged', { state: 'countdown' });
-    this.emit('sound', 'countdown');
+    this.emit('sound', { type: 'countdown' });
   }
 
   // 返回大廳：清空比賽車輛與道具，保留已連線的真人玩家
