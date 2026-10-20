@@ -1,0 +1,490 @@
+/* ============================================================
+   controller.css — 手機方向盤控制器專用樣式表
+   專為觸控螢幕、大拇指操控與全螢幕橫向體感設計，停用選取與雙擊縮放
+   ============================================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #0f111a;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  touch-action: none;
+}
+
+/* 畫面容器切換 */
+.screen {
+  display: none;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.screen.active {
+  display: flex;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ============================================================
+   畫面一：加入房間畫面樣式
+   ============================================================ */
+#join-screen {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  background: radial-gradient(circle at center, #1e2438 0%, #0d101d 100%);
+  overflow-y: auto;
+}
+
+.join-card {
+  width: 100%;
+  max-width: 440px;
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  padding: 24px 28px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.join-header {
+  text-align: center;
+}
+
+.join-header h1 {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #ffcc00;
+  text-shadow: 0 2px 8px rgba(255, 204, 0, 0.3);
+}
+
+.join-header .subtitle {
+  font-size: 13px;
+  color: #a0aec0;
+  margin-top: 4px;
+}
+
+.warning-box {
+  background: rgba(231, 76, 60, 0.15);
+  border: 1px solid #e74c3c;
+  color: #ff7675;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.input-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e0;
+}
+
+.input-group input {
+  width: 100%;
+  height: 48px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 0 16px;
+  color: #ffffff;
+  font-size: 17px;
+  font-weight: 600;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.input-group input:focus {
+  border-color: #38ef7d;
+  box-shadow: 0 0 12px rgba(56, 239, 125, 0.3);
+}
+
+.error-text {
+  background: rgba(231, 76, 60, 0.2);
+  border: 1px solid #e74c3c;
+  color: #ff9ff3;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.btn-primary {
+  width: 100%;
+  height: 52px;
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  border: none;
+  border-radius: 14px;
+  color: #ffffff;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(56, 239, 125, 0.35);
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 8px rgba(56, 239, 125, 0.2);
+}
+
+.join-tips {
+  font-size: 11px;
+  color: #718096;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ============================================================
+   畫面二：方向盤體感控制畫面樣式（橫向操控）
+   ============================================================ */
+#wheel-screen {
+  flex-direction: column;
+  background: #0f121d;
+  position: relative;
+}
+
+/* 上方狀態條（依玩家顏色自訂背景） */
+#top-bar {
+  width: 100%;
+  height: 64px;
+  background: #2c3e50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+  transition: background-color 0.4s ease;
+}
+
+.info-badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 8px;
+  padding: 4px 12px;
+  min-width: 68px;
+}
+
+.badge-label {
+  font-size: 10px;
+  color: #e2e8f0;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.badge-value {
+  font-size: 17px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+.wheel-indicator-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.wheel-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: transform 0.05s linear;
+}
+
+#steer-degree {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffd32a;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-action {
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 8px;
+  color: #ffffff;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-action:active {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* 主操控區（左倒退、右油門、中道具） */
+#control-area {
+  flex: 1;
+  display: flex;
+  width: 100%;
+  position: relative;
+}
+
+/* 觸控區域 */
+.touch-zone {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  transition: background-color 0.1s ease, transform 0.05s;
+}
+
+.zone-left {
+  background: linear-gradient(135deg, rgba(231, 76, 60, 0.15) 0%, rgba(192, 57, 43, 0.25) 100%);
+  border-right: 2px dashed rgba(255, 255, 255, 0.15);
+}
+
+.zone-left.active {
+  background: linear-gradient(135deg, rgba(231, 76, 60, 0.55) 0%, rgba(192, 57, 43, 0.75) 100%);
+}
+
+.zone-right {
+  background: linear-gradient(135deg, rgba(46, 204, 113, 0.15) 0%, rgba(39, 174, 96, 0.25) 100%);
+  border-left: 2px dashed rgba(255, 255, 255, 0.15);
+}
+
+.zone-right.active {
+  background: linear-gradient(135deg, rgba(46, 204, 113, 0.55) 0%, rgba(39, 174, 96, 0.75) 100%);
+}
+
+.zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.zone-icon {
+  font-size: 42px;
+}
+
+.zone-title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+/* 中央道具按鈕與甩尾提示區 */
+.zone-center {
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.item-circle {
+  pointer-events: auto;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #4a69bd 0%, #1e3799 100%);
+  border: 4px solid #f8c291;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: transform 0.08s ease, border-color 0.2s, box-shadow 0.2s;
+}
+
+.item-circle:active {
+  transform: scale(0.92);
+}
+
+.item-circle.ready {
+  border-color: #ffd32a;
+  box-shadow: 0 0 20px rgba(255, 211, 42, 0.6);
+}
+
+.item-icon {
+  font-size: 38px;
+  line-height: 1;
+}
+
+.item-stars {
+  font-size: 13px;
+  color: #ffd32a;
+  letter-spacing: 2px;
+  height: 16px;
+  margin-top: 2px;
+  font-weight: 900;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+}
+
+.drift-tip-banner {
+  position: absolute;
+  bottom: 8px;
+  width: 280px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 204, 0, 0.4);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: #ffea79;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   比賽進行中提示遮罩
+   ============================================================ */
+.overlay-notice {
+  position: absolute;
+  top: 64px;
+  left: 0;
+  width: 100%;
+  height: calc(100% - 64px);
+  background: rgba(15, 17, 26, 0.88);
+  backdrop-filter: blur(8px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 20;
+}
+
+.notice-card {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 204, 0, 0.5);
+  border-radius: 16px;
+  padding: 24px 32px;
+  text-align: center;
+  max-width: 80%;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+}
+
+.notice-card h2 {
+  font-size: 22px;
+  color: #f6b93b;
+  margin-bottom: 8px;
+}
+
+.notice-card p {
+  font-size: 14px;
+  color: #dcdde1;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   受擊紅框閃爍疊層
+   ============================================================ */
+.flash-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(231, 76, 60, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 999;
+  transition: opacity 0.05s ease;
+}
+
+.flash-overlay.flashing {
+  opacity: 1;
+}
+
+/* ============================================================
+   直立螢幕強制旋轉橫向提醒
+   ============================================================ */
+.rotate-prompt {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #0f111a;
+  z-index: 10000;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  text-align: center;
+}
+
+/* 直向時自動顯示提醒 */
+@media (orientation: portrait) {
+  .rotate-prompt {
+    display: flex !important;
+  }
+}
+
+.rotate-content {
+  max-width: 300px;
+}
+
+.phone-rotate-icon {
+  font-size: 54px;
+  margin-bottom: 16px;
+  animation: pulseRotate 2s infinite ease-in-out;
+}
+
+@keyframes pulseRotate {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(-90deg) scale(1.1); }
+}
+
+.rotate-content h2 {
+  font-size: 20px;
+  color: #ffcc00;
+  margin-bottom: 8px;
+}
+
+.rotate-content p {
+  font-size: 13px;
+  color: #a4b0be;
+  line-height: 1.5;
+}
