@@ -97,6 +97,9 @@ async function bootstrap() {
   game.track.buildMeshes(scene, assets);
   game.itemSystem.attachView(scene, assets);
 
+  // 素材載入完成，切換核心狀態至大廳
+  game.enterLobby();
+
   // 6. 建立追尾鏡頭群與全場相機
   const chaseCameras = [
     new ChaseCamera(0, game.track),
@@ -116,6 +119,7 @@ async function bootstrap() {
   // 8. 狀態切換時動態掛載/卸載車輛 3D 視覺
   game.on('stateChanged', ({ state }) => {
     if (state === 'countdown') {
+      chaseCameras.forEach((c) => c.reset());
       for (const racer of game.racers) {
         if (racer.car) {
           racer.car.attachView(scene, assets, racer.color);
@@ -197,7 +201,7 @@ async function bootstrap() {
         }
         game.startRace();
       }
-    } else if (state === 'racing') {
+    } else if (state === 'racing' || state === 'countdown') {
       if (e.code === 'Escape') {
         game.backToLobby();
       }

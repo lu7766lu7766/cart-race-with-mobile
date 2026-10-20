@@ -40,6 +40,7 @@ export class Car {
     this.nitroLevel = 0;         // 氮氣等級（1~3）
     this.spinTimer = 0;          // 踩香蕉打滑計時器
     this.hitTimer = 0;           // 被導彈擊中停頓計時器
+    this.hitFlashTimer = 0;      // 受擊紅框閃爍計時器（獨立 0.3 秒）
     this.spinOutTimer = 0;       // 起跑太早按油門空轉懲罰計時器
 
     // 甩尾狀態
@@ -89,6 +90,7 @@ export class Car {
     }
     if (this.spinTimer > 0) this.spinTimer = Math.max(0, this.spinTimer - dt);
     if (this.hitTimer > 0) this.hitTimer = Math.max(0, this.hitTimer - dt);
+    if (this.hitFlashTimer > 0) this.hitFlashTimer = Math.max(0, this.hitFlashTimer - dt);
     if (this.spinOutTimer > 0) this.spinOutTimer = Math.max(0, this.spinOutTimer - dt);
 
     // 2. 輸入讀取與異常狀態處理
@@ -341,6 +343,7 @@ export class Car {
       return false;
     }
     this.hitTimer = CONFIG.HIT_TIME * this.stats.hitStunMult;
+    this.hitFlashTimer = 0.3;
     this.vy = 12;
     this.grounded = false;
     this.speed = 0;
@@ -348,8 +351,8 @@ export class Car {
     return true;
   }
 
-  // 踩到香蕉皮
-  hitBanana() {
+  // 踩到香蕉皮（支援自訂打滑時長，例如巨大香蕉）
+  hitBanana(duration = CONFIG.SPIN_TIME) {
     if (this.shieldTimer > 0) {
       if (this.shieldLevel < 3) {
         this.shieldTimer = 0;
@@ -357,7 +360,11 @@ export class Car {
       }
       return false;
     }
-    this.spinTimer = CONFIG.SPIN_TIME;
+    if (this.spinTimer > 0) {
+      return false;
+    }
+    this.spinTimer = duration;
+    this.hitFlashTimer = 0.3;
     this.speed *= 0.3;
     this._cancelDrift();
     return true;
@@ -557,8 +564,31 @@ export class Car {
     }
   }
 
-  // 銷毀 3D 視覺物件
+  // 銷毀 3D 視覺物件（逐一釋放自行 new 出的幾何體、材質與貼圖，共用 GLB 資源不 dispose）
   detachView() {
+    if (this.colorRing) {
+      this.colorRing.geometry?.dispose?.();
+      this.colorRing.material?.dispose?.();
+      this.colorRing = null;
+    }
+    if (this.shieldMesh) {
+      this.shieldMesh.geometry?.dispose?.();
+      this.shieldMesh.material?.dispose?.();
+      this.shieldMesh = null;
+    }
+    if (this.nameSprite) {
+      this.nameSprite.material?.map?.dispose?.();
+      this.nameSprite.material?.dispose?.();
+      this.nameSprite = null;
+    }
+    if (this.sparkPoints) {
+      this.sparkPoints.geometry?.dispose?.();
+      this.sparkPoints.material?.dispose?.();
+      this.sparkPoints = null;
+    }
+    this.sparkGroup = null;
+    this.wheels = { fl: null, fr: null, bl: null, br: null };
+
     if (this.viewGroup && this.viewGroup.parent) {
       this.viewGroup.parent.remove(this.viewGroup);
       this.viewGroup = null;

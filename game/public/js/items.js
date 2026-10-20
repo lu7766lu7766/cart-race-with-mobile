@@ -195,12 +195,9 @@ export class ItemSystem {
         // 6.5: 高度差 > 2.5 不算碰到（跳過香蕉是合法技巧）
         if (dx * dx + dz * dz <= radius * radius && dy <= 2.5) {
           hit = true;
-          const wasSpun = car.hitBanana();
+          const spinDuration = banana.spinTime || CONFIG.SPIN_TIME;
+          const wasSpun = car.hitBanana(spinDuration);
           if (wasSpun) {
-            // 若為巨大香蕉，打滑時間加長為 2 秒
-            if (banana.spinTime && banana.spinTime > CONFIG.SPIN_TIME) {
-              car.spinTimer = banana.spinTime;
-            }
             if (this.game) {
               this.game.emit('playerHit', { player: racer, by: banana.ownerPlayerId });
               this.game.emit('sound', 'spin');
@@ -340,13 +337,18 @@ export class ItemSystem {
     const rx = -Math.cos(car.heading);
     const rz = Math.sin(car.heading);
 
+    const spinTimes = CONFIG.ITEM_LEVELS?.bananaSpinTime || [1.2, 1.2, 2.0];
+    const spinLv1 = spinTimes[0] || CONFIG.SPIN_TIME;
+    const spinLv2 = spinTimes[1] || CONFIG.SPIN_TIME;
+    const spinLv3 = spinTimes[2] || 2.0;
+
     if (level === 1) {
       this._addBanana({
         x: car.x - fx * 3,
         z: car.z - fz * 3,
         ownerPlayerId: racer.id,
         radius: 1.8,
-        spinTime: 1.2,
+        spinTime: spinLv1,
         ownerImmunityTimer: 0.5,
       });
     } else if (level === 2) {
@@ -356,7 +358,7 @@ export class ItemSystem {
         z: car.z - fz * 3,
         ownerPlayerId: racer.id,
         radius: 1.8,
-        spinTime: 1.2,
+        spinTime: spinLv2,
         ownerImmunityTimer: 0.5,
       });
       this._addBanana({
@@ -364,7 +366,7 @@ export class ItemSystem {
         z: car.z - fz * 3.5 - rz * 1.5,
         ownerPlayerId: racer.id,
         radius: 1.8,
-        spinTime: 1.2,
+        spinTime: spinLv2,
         ownerImmunityTimer: 0.5,
       });
       this._addBanana({
@@ -372,17 +374,17 @@ export class ItemSystem {
         z: car.z - fz * 3.5 + rz * 1.5,
         ownerPlayerId: racer.id,
         radius: 1.8,
-        spinTime: 1.2,
+        spinTime: spinLv2,
         ownerImmunityTimer: 0.5,
       });
     } else if (level === 3) {
-      // 巨大香蕉 1 個（半徑 3.6，打滑 2.0 秒）
+      // 巨大香蕉 1 個（半徑 3.6，打滑時間依 CONFIG.ITEM_LEVELS.bananaSpinTime[2]）
       this._addBanana({
         x: car.x - fx * 3.5,
         z: car.z - fz * 3.5,
         ownerPlayerId: racer.id,
         radius: 3.6,
-        spinTime: 2.0,
+        spinTime: spinLv3,
         isGiant: true,
         ownerImmunityTimer: 0.5,
       });
@@ -396,7 +398,7 @@ export class ItemSystem {
         z: aheadPos.z,
         ownerPlayerId: racer.id,
         radius: 1.8,
-        spinTime: 1.2,
+        spinTime: spinLv1,
         ownerImmunityTimer: 1.5,
       });
     }
@@ -417,7 +419,7 @@ export class ItemSystem {
       z: opts.z,
       ownerPlayerId: opts.ownerPlayerId,
       radius: opts.radius || 1.8,
-      spinTime: opts.spinTime || 1.2,
+      spinTime: opts.spinTime || CONFIG.SPIN_TIME,
       isGiant: Boolean(opts.isGiant),
       ownerImmunityTimer: opts.ownerImmunityTimer ?? 0.5,
     };
@@ -501,6 +503,8 @@ export class ItemSystem {
     if (this.bananaMeshes.has(banana.id)) {
       const mesh = this.bananaMeshes.get(banana.id);
       if (mesh.parent) mesh.parent.remove(mesh);
+      mesh.geometry?.dispose?.();
+      mesh.material?.dispose?.();
       this.bananaMeshes.delete(banana.id);
     }
     this.bananas.splice(index, 1);
@@ -512,6 +516,8 @@ export class ItemSystem {
     if (this.missileMeshes.has(missile.id)) {
       const mesh = this.missileMeshes.get(missile.id);
       if (mesh.parent) mesh.parent.remove(mesh);
+      mesh.geometry?.dispose?.();
+      mesh.material?.dispose?.();
       this.missileMeshes.delete(missile.id);
     }
     this.missiles.splice(index, 1);
@@ -628,8 +634,16 @@ export class ItemSystem {
     }
   }
 
-  // 清除 3D 物件
+  // 清除 3D 物件並釋放動態生成之幾何體與材質
   detachView() {
+    for (const mesh of this.bananaMeshes.values()) {
+      mesh.geometry?.dispose?.();
+      mesh.material?.dispose?.();
+    }
+    for (const mesh of this.missileMeshes.values()) {
+      mesh.geometry?.dispose?.();
+      mesh.material?.dispose?.();
+    }
     if (this.viewGroup && this.viewGroup.parent) {
       this.viewGroup.parent.remove(this.viewGroup);
       this.viewGroup = null;

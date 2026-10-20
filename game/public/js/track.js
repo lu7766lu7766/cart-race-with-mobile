@@ -637,8 +637,8 @@ export class Track {
     const safeDist = this.width / 2 + this.shoulder + 6;
 
     // 起點拱門架（跨越起終點）
-    if (assets.getProp && assets.getProp('overheadLights')) {
-      const lights = assets.getProp('overheadLights');
+    const lights = assets.getProp ? assets.getProp('overheadLights') : null;
+    if (lights) {
       const startS = this.sampleAt(0);
       lights.position.set(startS.point.x, startS.height, startS.point.z);
       const gantryWidth = this.width + 2 * this.shoulder + 2;
@@ -667,9 +667,10 @@ export class Track {
         if (Math.abs(proj.lateral) < safeDist) continue;
 
         const propName = propTypes[(i + (side > 0 ? 1 : 0)) % propTypes.length];
-        if (assets.getProp && assets.getProp(propName)) {
-          const prop = assets.getProp(propName);
-          prop.position.set(px, s.height, pz);
+        const prop = assets.getProp ? assets.getProp(propName) : null;
+        if (prop) {
+          // 擺放在外側平面草地上（y = 0，避免起伏山丘路段懸空）
+          prop.position.set(px, 0, pz);
           const pScale = propName.startsWith('tree') ? scale * 1.2 : scale;
           prop.scale.set(pScale, pScale, pScale);
           prop.rotation.y = Math.atan2(s.tangent.x, s.tangent.z) + (side > 0 ? Math.PI : 0);

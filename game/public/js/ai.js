@@ -27,6 +27,7 @@ export class AIInput {
 
     // 道具施放與升級保留計時器
     this.itemWaitTimer = -1;
+    this.missileWaitTimer = 0;
     this.lastItem = null;
     this.lastItemLevel = 0;
     this.holdForUpgrade = false;
@@ -122,6 +123,7 @@ export class AIInput {
       if (this.lastItem !== currentItem || this.lastItemLevel !== currentLevel) {
         this.lastItem = currentItem;
         this.lastItemLevel = currentLevel;
+        this.missileWaitTimer = 0;
 
         // 若為 Lv1 或 Lv2，以 60% 機率決定留著等升級
         if (currentLevel < 3 && this.rng() < 0.6) {
@@ -161,9 +163,15 @@ export class AIInput {
             if (Math.abs(diff) < 0.3) useItem = true;
             else this.itemWaitTimer = 0.4;
           } else if (currentItem === 'missile') {
+            this.missileWaitTimer += dt;
             const hasAhead = this._isRacerAhead(car);
-            if (hasAhead || currentLevel >= 2 || Math.abs(diff) < 0.35) useItem = true;
-            else this.itemWaitTimer = 0.5;
+            // 導彈（任何等級）只在前方有車時發射，等最久 6 秒才放棄條件直接用
+            if (hasAhead || this.missileWaitTimer >= 6.0) {
+              useItem = true;
+              this.missileWaitTimer = 0;
+            } else {
+              this.itemWaitTimer = 0.5;
+            }
           } else if (currentItem === 'banana') {
             useItem = true;
           } else if (currentItem === 'shield') {
@@ -178,6 +186,7 @@ export class AIInput {
       this.lastItemLevel = 0;
       this.holdForUpgrade = false;
       this.itemWaitTimer = -1;
+      this.missileWaitTimer = 0;
     }
 
     return { steer, throttle, brake, useItem };

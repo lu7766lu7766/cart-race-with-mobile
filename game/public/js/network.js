@@ -14,5 +14,4 @@
 
 export function initNetwork(game) {
   // 第一階段為空實作，保留 API 入口供 main.js 呼叫
-  console.log('[Network] 第一階段單機模式：網路通訊介面就緒（第二階段將在此加入 WebSocket 連線）');
 }

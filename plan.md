@@ -185,37 +185,88 @@ game.on('stateChanged', ({ state }) => …)
 game.on('playerFinished', ({ player, rank, time }) => …)
 ```
 
+### 5.10 實作工作拆解（老師端完成）
+
+- [x] 1. 空殼伺服器與 HTML 架構
+- [x] 2. 賽道幾何計算與 3D 渲染（`track.js`）
+- [x] 3. 車輛物理核心與輸入控制（`car.js`, `input.js`）
+- [x] 4. 甩尾迷你加速與角色被動能力
+- [x] 5. 賽道起伏、跳台與滯空重力
+- [x] 6. 魔石道具升級系統（`items.js`）
+- [x] 7. AI 電腦玩家與升級策略（`ai.js`）
+- [x] 8. 自動分割畫面追尾相機（`camera.js`）
+- [x] 9. 分割畫面專屬 HUD 面板與小地圖（`hud.js`）
+- [x] 10. WebAudio 音效系統（`audio.js`）
+- [x] 11. 自動化測試全數通過（`tests/`）
+
 ---
 
 ## 6. 第二階段規格（學生透過提示詞完成）
 
 ### 6.1 伺服器
 - 套件：`ws`（WebSocket）、`selfsigned`（產生自簽憑證）、`qrcode`（產生 QR Code SVG）。
-- 同時開 HTTP `:3000`（大螢幕用 localhost）與 HTTPS `:3443`（手機用），共用 `/ws`。
-- 憑證存於 `cert/`，重複使用。
-- `GET /api/server-info` → `{ controllerUrl: "https://<區網IP>:3443/controller.html", qrSvg }`。
+- 同時開 HTTP `:3000`（大螢幕用 localhost）與 HTTPS `:3443`（手機用），兩者共用同一套 WebSocket 處理（路徑 `/ws`）。
+- 憑證第一次啟動時產生，存在 `cert/`，之後重複使用（手機只需要信任一次）。
+- `GET /api/server-info` → `{ controllerUrl: "https://<區網IP>:3443/controller.html", qrSvg }`
+- 啟動時在終端機印出區網 IP 與手機網址。
+- 每 15 秒對每個連線送 ping，沒有回 pong 的連線就關閉（處理手機休眠的半開連線）。
 
 ### 6.2 WebSocket 訊息協定（JSON）
 
 | 方向 | 訊息 | 說明 |
 |---|---|---|
 | 大螢幕→伺服器 | `{type:'host'}` | 建立房間 |
-| 伺服器→大螢幕 | `{type:'roomCreated', code:'4821'}` | 4 位數房號 |
+| 伺服器→大螢幕 | `{type:'roomCreated', code:'4821'}` | 4 位數房號，不與現有房間重複 |
 | 手機→伺服器 | `{type:'join', code, name}` | 加入房間 |
-| 伺服器→手機 | `{type:'joined', playerId}` 或 `{type:'error', message}` | 錯誤訊息 |
+| 伺服器→手機 | `{type:'joined', playerId}` 或 `{type:'error', message}` | 房號錯誤、房間已滿（4 人）等 |
 | 伺服器→大螢幕 | `{type:'playerJoined', playerId, name}` / `{type:'playerLeft', playerId}` | |
-| 手機→伺服器→大螢幕 | `{type:'input', steer, throttle, brake, item}` | 轉送給大螢幕；同時按油門與倒退為甩尾 |
+| 手機→伺服器→大螢幕 | `{type:'input', steer, throttle, brake, item}`（大螢幕收到時多一個 `playerId`） | 每秒 30 次；`item` 為累加計數器，大螢幕比對數字增加時才觸發一次道具，封包遺失也不會重複觸發；`throttle` 與 `brake` 同時為 1 時大螢幕當成甩尾 |
 | 大螢幕→伺服器→手機 | `{type:'toPlayer', playerId, data}` → 手機收到 `data` | `data`：`{type:'status', item, itemLevel, position, lap, totalLaps, color, state, inRace}`、`{type:'vibrate', ms}` |
-| 伺服器→手機 | `{type:'roomClosed'}` | 大螢幕關閉 |
+| 伺服器→手機 | `{type:'roomClosed'}` | 大螢幕關閉或重新整理 |
+
+### 6.3 大螢幕（`network.js`）
+- 連線 `ws(s)://<目前網址>/ws`，送出 `host`，用 `game.setRoomInfo` 顯示房號＋QR Code＋網址。
+- `RemoteInput` 類別（實作 `getState()`）：保存最新輸入；超過 500 ms 沒收到就自動歸零（避免斷線暴衝）。
+- `playerJoined` → `game.addPlayer({kind:'remote'})`；`playerLeft` → `game.removePlayer`。
+- 訂閱 `game.on(...)` 事件，把道具（status 多 itemLevel）、名次、圈數、車色、震動傳給對應手機。
+- 斷線時每 2 秒自動重連。
+
+### 6.4 手機控制器（`public/controller.html`＋`js/controller.js`）
+- **步驟 1**：輸入房號（數字鍵盤）＋暱稱 →「開始」按鈕。按下時（必須在使用者點擊當下）呼叫 `DeviceMotionEvent.requestPermission()` / `DeviceOrientationEvent.requestPermission()`（iOS），並嘗試全螢幕、鎖定橫向、Wake Lock 防止螢幕變暗。
+- **步驟 2（橫向）**：左半邊大按鈕「倒退」、右半邊大按鈕「油門」、中央圓形道具鈕（顯示 ⚡🍌🚀🛡️ 或空，道具鈕顯示 ★ 等級）；同時按油門＋倒退時兩個都送 1，大螢幕會當成甩尾；上方顯示名次/圈數，背景為車色；方向盤圖示即時顯示傾斜角度；「校正」與「反轉方向」小按鈕。直拿時顯示「請把手機轉橫」。
+- **轉向演算法**：用 `devicemotion` 的 `accelerationIncludingGravity`（重力向量），依 `screen.orientation.angle` 換算成螢幕座標，算出 `atan2` 傾斜角；扣掉校正值、3° 死區，±35° 對應 steer -1～+1，並做低通濾波。沒有 devicemotion 時退回 `deviceorientation`。
+- 觸控用 `touchstart/touchend`＋`preventDefault`，支援多指同時按（油門＋道具），並停用縮放與長按選取。
+- 收到 `vibrate` 時呼叫 `navigator.vibrate`（iOS 不支援時改用畫面閃紅）。
 
 ---
 
 ## 7. 學生用提示詞（第二階段）
 
-> 使用方式：用 Claude Code 或 Cursor 開啟 `game` 資料夾，**依序**貼上提示詞 1 → 4，每一步都照「確認成功」做檢查，成功後再進行下一步。
+> 使用方式：用 Claude Code 或 Cursor 開啟 `game` 資料夾，**依序**貼上提示詞 1 → 4，每一步都照「確認成功」做檢查，成功後再進行下一步。出錯時貼上「提示詞 Ⓐ 除錯」。
 
 ### 提示詞 1：伺服器加入 WebSocket 房間與 HTTPS
-（內容同前，保留完整規格與心跳機制）
+
+```
+你是我的程式老師，我是初學者。這是一個用 Three.js 寫的網頁賽車遊戲專案（第一階段已完成，可用鍵盤玩）。
+請先閱讀 server.js、public/js/game.js、public/js/network.js 了解專案，然後修改 server.js，加入手機多人連線需要的伺服器功能：
+
+1. 安裝並使用套件：ws（WebSocket）、selfsigned（自簽憑證）、qrcode（產生 QR Code），更新 package.json。
+2. 保留原本 HTTP 3000 埠；另外開 HTTPS 3443 埠，用 selfsigned 產生憑證並存到 cert/ 資料夾，下次啟動直接讀取。兩個埠提供相同的網頁，也都在路徑 /ws 接受 WebSocket 連線（共用同一套處理程式）。
+3. 新增 GET /api/server-info，回傳 JSON：{ controllerUrl: "https://<本機區網IPv4>:3443/controller.html", qrSvg: <controllerUrl 的 QR Code SVG 字串> }。區網 IP 用 os.networkInterfaces() 找，排除 127.0.0.1 和虛擬網卡。
+4. 房間功能，訊息一律是 JSON：
+   - 大螢幕送 {type:'host'} → 建立 4 位數字不重複的房號，回 {type:'roomCreated', code}
+   - 手機送 {type:'join', code, name} → 成功回 {type:'joined', playerId}，並通知大螢幕 {type:'playerJoined', playerId, name}；房號不存在或已有 4 位手機玩家就回 {type:'error', message:'中文錯誤訊息'}
+   - 手機送 {type:'input', steer, throttle, brake, item} → 加上 playerId 轉給該房間的大螢幕
+   - 大螢幕送 {type:'toPlayer', playerId, data} → 把 data 原封不動轉給那支手機
+   - 手機斷線 → 通知大螢幕 {type:'playerLeft', playerId}；大螢幕斷線 → 通知所有手機 {type:'roomClosed'} 並刪除房間
+   - 每 15 秒對每個連線送 ping，沒有回 pong 的連線就關閉（處理手機休眠的半開連線）
+   - 收到格式錯誤的訊息要忽略，不能讓伺服器當掉
+5. 啟動時在終端機用中文印出：大螢幕網址 http://localhost:3000 與手機網址 https://<區網IP>:3443/controller.html。
+
+請在程式裡加詳細的中文註解。完成後告訴我要執行哪些指令，以及怎麼確認成功。
+```
+
+**確認成功**：`npm install` → `npm start`，終端機印出兩個網址；瀏覽器開 `http://localhost:3000/api/server-info` 看到 JSON；原本的遊戲照常能玩。
 
 ### 提示詞 2：大螢幕顯示房號並接收手機玩家
 
@@ -279,16 +330,40 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 ```
 
 ### 提示詞 4：整合測試與優化
-（內容同前）
+
+```
+請幫我檢查整個多人連線流程並修正問題：
+1. 2 支手機加 1 位鍵盤玩家一起比賽，空位要由 AI 補滿 4 台（2 支手機用左右分割、3～4 人用四格）。
+2. 比賽中有手機斷線，那台車要改由 AI 接手，比賽不能中斷；手機重新加入後，下一場可以繼續玩。
+3. 比賽中才加入的手機要顯示「比賽進行中，下一場再上場」。
+4. 一場結束回到大廳後，手機玩家要保留在大廳，不用重新輸入房號。
+5. 確認手機送出的 input 數值都有限制在合理範圍（steer -1～1、throttle/brake 0～1），避免作弊或錯誤資料。
+請列出你檢查的項目、發現的問題與修改內容。
+```
+
+### 提示詞 Ⓐ：除錯（遇到問題時使用）
+
+```
+我的手機連不上（或方向盤沒反應）。我的狀況是：＿＿＿＿（例如：手機顯示什麼錯誤、電腦終端機出現什麼訊息）。
+請一步一步帶我檢查：Windows 防火牆是否允許 Node.js 的 3000/3443 埠、手機和電腦是否在同一個 Wi-Fi、
+網址是否為 https、憑證警告是否已經同意、iPhone 的動作與方向權限是否允許、瀏覽器 Console 的錯誤訊息。
+每一步告訴我要看哪裡、看到什麼代表正常。
+```
+
+### 加分挑戰（選做）
+- 手機上選擇卡丁車角色、顯示自己的完賽時間與最佳單圈
+- 新增第二條賽道與賽道選擇
+- 手機畫面顯示小地圖或被瞄準警告
 
 ---
 
 ## 8. 參考解答與驗證流程（老師端分支管理）
 
-1. 在 `main` 分支完成第一階段（陸行鳥大賽車風格）並通過第 9 節驗收後，打 tag `phase1-v2`。
-2. 從 `main` 分支建立並切換至 `phase2` 分支製作參考解答：`git checkout -b phase2`。
-3. 驗證提示詞：從 `main` 開拋棄式分支 `prompt-test`，逐字貼第 7 節提示詞模擬學生操作並記錄除錯。
-4. 之後若 `main` 主分支修復 bug，執行 `git switch phase2 && git merge main`。
+1. 在 `main` 分支完成第一階段（陸行鳥大賽車風格）並通過第 9 節驗收後，打 tag `phase1-v1`。
+2. 從 `main` 分支建立並切換至 `phase2` 分支製作參考解答：`git checkout -b phase2`，**照第 7 節提示詞逐字**依序執行（模擬學生操作），記錄 AI 卡住或誤解的地方，回頭修改提示詞的措辭。
+3. 實機測試：Android Chrome、iPhone Safari 各一支，確認權限流程、轉向方向、多指觸控與震動。
+4. 修改後的提示詞回寫本文件第 7 節。
+5. 之後若 `main` 主分支修復 bug，執行 `git switch phase2 && git merge main`。
 
 ---
 
@@ -312,3 +387,30 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 - [ ] 4 支手機同時連線，傾斜轉向、油門、倒退（雙鍵甩尾）、道具（等級星號）都能用
 - [ ] 手機收到道具圖示、名次、圈數；被擊中時震動
 - [ ] 比賽中手機斷線由 AI 接手；大螢幕重新整理時手機顯示「房間已關閉」
+
+---
+
+## 10. 風險與對策
+
+| 風險 | 對策 |
+|---|---|
+| 手機感測器必須在 HTTPS 下使用 | 伺服器內建自簽憑證（HTTPS 3443）。若 iPhone 仍拒絕，備案為 `cloudflared tunnel --url http://localhost:3000`（免帳號、提供正式 HTTPS 網址，需要能連外網） |
+| iOS 需要使用者點擊才能取得感測器權限 | 權限要求放在「開始」按鈕的點擊事件中 |
+| 校園 Wi-Fi 開啟「用戶端隔離」，手機連不到電腦 | 改用老師手機熱點或獨立的 AP；計畫書與除錯提示詞都有寫 |
+| Windows 防火牆擋住 Node.js | 第一次啟動時在防火牆提示中允許「私人網路」；除錯提示詞有說明 |
+| 各廠牌手機重力軸方向不一致 | 提供「校正」與「反轉方向」按鈕 |
+| 手機進入休眠或切到背景 | 使用 Wake Lock；RemoteInput 500 ms 沒有輸入就歸零；斷線改由 AI 接手 |
+| AI 產生的程式和原架構衝突 | 第一階段先把 API（addPlayer/removePlayer/setRoomInfo/事件）與 `network.js` 空殼準備好，提示詞明確要求「只改 network.js」 |
+| 模型載入失敗 | `assets.js` 自動用方塊模型代替，遊戲照常可玩 |
+| 分割畫面效能 | 陰影每幀只更新一次、pixelRatio 上限 1.5 |
+
+---
+
+## 11. 目前進度
+
+- ✅ 引擎選型：Three.js 0.186.1
+- ✅ Kenney Car Kit 3.1／Racing Kit 素材已下載並挑選到 `game/public/models/`（CC0 授權檔一併附上）
+- ✅ `game/package.json`、`game/server.js`
+- ✅ `game/public/js/config.js`、`game/public/js/utils.js`
+- ✅ 第一階段（含陸行鳥大賽車風格升級）
+- ⬜ 第二階段參考解答與提示詞實測（第 8 節）

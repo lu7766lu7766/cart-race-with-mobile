@@ -50,6 +50,13 @@ export function handleRequest(req, res) {
     return;
   }
 
+  // 解碼後若路徑包含空字元（Null Byte \0），回傳 400 Bad Request
+  if (urlPath.includes('\0')) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad Request');
+    return;
+  }
+
   if (urlPath.endsWith('/')) urlPath += 'index.html';
 
   const route = ROUTES.find((r) => urlPath.startsWith(r.prefix));
@@ -68,16 +75,22 @@ export function handleRequest(req, res) {
     return;
   }
 
-  fs.readFile(filePath, (err, data) => {
-    if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('找不到檔案：' + urlPath);
-      return;
-    }
-    const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
-    res.end(data);
-  });
+  // 3. 安全防護：將 fs.readFile 包於 try/catch 內，防止同步丟出之例外導致伺服器崩潰
+  try {
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('找不到檔案：' + urlPath);
+        return;
+      }
+      const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+      res.end(data);
+    });
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bad Request');
+  }
 }
 
 // 封裝啟動伺服器函式，支援測試與外部呼叫

@@ -32,6 +32,11 @@ export class ChaseCamera {
     this.initialized = false;
   }
 
+  // 重設相機初始化標記（新開賽倒數時重設位置朝向，避免從上一場終點滑移）
+  reset() {
+    this.initialized = false;
+  }
+
   // 每幀更新相機位置與朝向
   update(dt, car) {
     if (!car) return;
@@ -50,10 +55,12 @@ export class ChaseCamera {
     }
 
     // 1. 鏡頭朝向跟隨（平滑追隨 car.heading，率約 5）
-    // 打滑旋轉時鏡頭不跟隨車身打轉；倒車時鏡頭不反轉翻轉
+    // 打滑旋轉時鏡頭不跟隨車身打轉；打滑結束時以有上限的轉速（4 rad/s）追回，避免鏡頭瞬間甩過去
     if (car.spinTimer <= 0) {
       const diff = angleDiff(this.camHeading, car.heading);
-      this.camHeading += diff * (1 - Math.exp(-CONFIG.CHASE_ROT_DAMP * dt));
+      const turnAmount = diff * (1 - Math.exp(-CONFIG.CHASE_ROT_DAMP * dt));
+      const maxTurn = 4.0 * dt;
+      this.camHeading += clamp(turnAmount, -maxTurn, maxTurn);
     }
 
     const fx = Math.sin(this.camHeading);

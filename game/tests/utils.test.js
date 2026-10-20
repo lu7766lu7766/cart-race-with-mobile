@@ -5,7 +5,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clamp, angleDiff, formatTime, Emitter, mulberry32, rand, getViewportRects } from '../public/js/utils.js';
+import { clamp, angleDiff, formatTime, Emitter, mulberry32, rand, getViewportRects, escapeHtml } from '../public/js/utils.js';
 
 test('clamp 限制數值在上下限區間', () => {
   assert.equal(clamp(5, 0, 10), 5);
@@ -95,4 +95,12 @@ test('6.8 分割畫面配置：getViewportRects 對 1/2/3/4 人回傳正確格�
   assert.equal(r4[1].y, 540);
   assert.equal(r4[2].y, 0);
   assert.equal(r4[3].y, 0);
+});
+
+test('escapeHtml 轉義 HTML 特殊字元防止 XSS 注入', () => {
+  assert.equal(escapeHtml('<script>alert("xss")</script>'), '&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;');
+  assert.equal(escapeHtml("Tom & 'Jerry'"), 'Tom &amp; &#039;Jerry&#039;');
+  assert.equal(escapeHtml(null), '');
+  assert.equal(escapeHtml(undefined), '');
+  assert.equal(escapeHtml(123), '123');
 });

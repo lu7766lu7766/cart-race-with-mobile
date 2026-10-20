@@ -110,3 +110,14 @@ export class Emitter {
     }
   }
 }
+
+// 轉義 HTML 特殊字元，防止 XSS 注入
+export function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}

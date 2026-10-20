@@ -66,10 +66,9 @@ export class KeyboardInput {
     return { steer, throttle, brake, drift, useItem };
   }
 
-  // 清空尚未讀取的道具觸發與按鍵
+  // 清空尚未讀取的道具觸發（保留玩家當前按住的油門/煞車按鍵，避免起步衝刺受阻）
   reset() {
     this.itemTriggered = false;
-    this.pressedKeys.clear();
   }
 
   // 移除事件監聽

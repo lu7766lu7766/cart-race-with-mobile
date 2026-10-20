@@ -34,7 +34,7 @@ export class Game extends Emitter {
     this.viewRacers = [];
 
     // 狀態機：loading -> lobby -> countdown -> racing -> results
-    this._state = 'lobby';
+    this._state = headless ? 'lobby' : 'loading';
 
     this.countdownTimer = 0;
     this.countdownValue = 3;
@@ -187,10 +187,6 @@ export class Game extends Emitter {
       }
 
       racer.car.update(dt, { steer, throttle, brake, drift }, this.track);
-
-      if (racer.car.wallHitThisFrame) {
-        this.emit('sound', 'wall');
-      }
     }
 
     // 更新車輛碰撞冷卻時間
@@ -235,16 +231,30 @@ export class Game extends Emitter {
           carB.x += nx * (overlap * factorB);
           carB.z += nz * (overlap * factorB);
 
-          // 6.4: Lv3 氮氣或 Lv3 護盾使對方打滑
+          // 6.4: Lv3 氮氣或 Lv3 護盾使對方打滑（加 0.5 秒冷卻，且僅在 hitBanana 成功時發 playerHit）
           if (carA.nitroLevel === 3 || carA.shieldLevel === 3) {
-            carB.hitBanana();
-            this.emit('playerHit', { player: racerB, by: racerA.id });
-            this.emit('sound', 'spin');
+            const hitKey = `hit_${racerA.id}_${racerB.id}`;
+            const hitCd = this.collisionCooldowns.get(hitKey) || 0;
+            if (hitCd <= 0) {
+              const hitSuccess = carB.hitBanana();
+              if (hitSuccess) {
+                this.collisionCooldowns.set(hitKey, 0.5);
+                this.emit('playerHit', { player: racerB, by: racerA.id });
+                this.emit('sound', 'spin');
+              }
+            }
           }
           if (carB.nitroLevel === 3 || carB.shieldLevel === 3) {
-            carA.hitBanana();
-            this.emit('playerHit', { player: racerA, by: racerB.id });
-            this.emit('sound', 'spin');
+            const hitKey = `hit_${racerB.id}_${racerA.id}`;
+            const hitCd = this.collisionCooldowns.get(hitKey) || 0;
+            if (hitCd <= 0) {
+              const hitSuccess = carA.hitBanana();
+              if (hitSuccess) {
+                this.collisionCooldowns.set(hitKey, 0.5);
+                this.emit('playerHit', { player: racerA, by: racerB.id });
+                this.emit('sound', 'spin');
+              }
+            }
           }
 
           // 相對接近速度計算
@@ -483,6 +493,14 @@ export class Game extends Emitter {
       state: this._state,
       inRace: true,
     };
+  }
+
+  // 素材載入完成後從 loading 進入 lobby
+  enterLobby() {
+    if (this._state === 'loading') {
+      this._state = 'lobby';
+      this.emit('stateChanged', { state: 'lobby' });
+    }
   }
 
   // 開始比賽：從大廳切換至倒數階段，真人上場＋電腦補滿 4 台

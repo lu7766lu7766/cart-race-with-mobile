@@ -6,12 +6,13 @@
 // ============================================================
 
 import { CONFIG, KARTS, ITEMS } from './config.js';
-import { formatTime, clamp, getViewportRects } from './utils.js';
+import { formatTime, clamp, getViewportRects, escapeHtml } from './utils.js';
 
 export class HUD {
   constructor(container, game) {
     this.container = container;
     this.game = game;
+    this._lastQr = null;
 
     // 建立 DOM 介面元素結構
     this._createDOM();
@@ -206,7 +207,8 @@ export class HUD {
     const state = this.game.state;
 
     this.lobbyEl.style.display = state === 'lobby' ? 'flex' : 'none';
-    this.countdownEl.style.display = state === 'countdown' ? 'flex' : 'none';
+    const showCountdown = state === 'countdown' || (state === 'racing' && this.game.raceTime < 0.8);
+    this.countdownEl.style.display = showCountdown ? 'flex' : 'none';
     this.racingEl.style.display = (state === 'racing' || state === 'countdown') ? 'block' : 'none';
     this.resultsEl.style.display = state === 'results' ? 'flex' : 'none';
 
@@ -216,6 +218,9 @@ export class HUD {
       this._updateCountdown();
       this._updateRacingHUD();
     } else if (state === 'racing') {
+      if (this.game.raceTime < 0.8) {
+        this._updateCountdown();
+      }
       this._updateRacingHUD();
     } else if (state === 'results') {
       this._updateResults();
@@ -237,9 +242,13 @@ export class HUD {
     if (roomQrEl) {
       if (roomInfo.qrSvg) {
         roomQrEl.style.display = 'block';
-        roomQrEl.innerHTML = roomInfo.qrSvg;
+        if (this._lastQr !== roomInfo.qrSvg) {
+          roomQrEl.innerHTML = roomInfo.qrSvg;
+          this._lastQr = roomInfo.qrSvg;
+        }
       } else {
         roomQrEl.style.display = 'none';
+        this._lastQr = null;
       }
     }
     if (roomMsgEl) roomMsgEl.textContent = roomInfo.message || '';
@@ -261,7 +270,7 @@ export class HUD {
           <div class="player-slot joined" style="border-left: 6px solid ${kart.color}">
             <div class="slot-main">
               <span class="slot-icon">${icon}</span>
-              <span class="slot-name">${human.name}</span>
+              <span class="slot-name">${escapeHtml(human.name)}</span>
               <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
             </div>
             <div class="slot-ability">
@@ -289,10 +298,14 @@ export class HUD {
     }
   }
 
-  // 更新倒數大字
+  // 更新倒數大字（包含進入 racing 0.8 秒內顯示 GO!）
   _updateCountdown() {
-    const val = this.game.countdownValue;
-    this.countdownEl.textContent = val > 0 ? val.toString() : 'GO!';
+    if (this.game.state === 'racing') {
+      this.countdownEl.textContent = 'GO!';
+    } else {
+      const val = this.game.countdownValue;
+      this.countdownEl.textContent = val > 0 ? val.toString() : 'GO!';
+    }
   }
 
   // 格式化名次序數大字（1st, 2nd, 3rd, 4th）
@@ -503,10 +516,10 @@ export class HUD {
         }
       }
 
-      // 5. 受擊紅框閃爍
+      // 5. 受擊紅框閃爍（獨立 0.3 秒計時）
       const flashEl = panel.querySelector('.cell-hit-flash');
       if (flashEl) {
-        flashEl.style.display = (car.hitTimer > 0 || car.spinTimer > 0.8) ? 'block' : 'none';
+        flashEl.style.display = (car.hitFlashTimer > 0) ? 'block' : 'none';
       }
 
       // 6. 完賽大字徽章
@@ -594,7 +607,7 @@ export class HUD {
       rowsHtml += `
         <tr>
           <td>#${rank}</td>
-          <td style="color:${r.color}; font-weight:bold;">${r.name}</td>
+          <td style="color:${r.color}; font-weight:bold;">${escapeHtml(r.name)}</td>
           <td>${totalTimeStr}</td>
           <td>${bestLapStr}</td>
         </tr>
