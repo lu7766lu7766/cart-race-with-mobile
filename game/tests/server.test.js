@@ -49,7 +49,7 @@ function waitForMessage(ws, predicate = () => true, timeoutMs = 3000) {
 }
 
 test('1. 大螢幕送出 {type: "host"} 能拿到 4 位數字不重複房號（1000~9999）', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -73,7 +73,7 @@ test('1. 大螢幕送出 {type: "host"} 能拿到 4 位數字不重複房號（1
 });
 
 test('2. 手機輸入錯誤房號時收到繁體中文 error 訊息', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -98,7 +98,7 @@ test('2. 手機輸入錯誤房號時收到繁體中文 error 訊息', async () =
 });
 
 test('3. 一個房間最多 4 支手機加入，第 5 支手機收到「已滿」error', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -138,7 +138,7 @@ test('3. 一個房間最多 4 支手機加入，第 5 支手機收到「已滿�
 });
 
 test('4. 手機送出 input 轉給大螢幕且帶有 playerId，且數值在伺服器端被 clamp 限制', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -178,7 +178,7 @@ test('4. 手機送出 input 轉給大螢幕且帶有 playerId，且數值在伺�
 });
 
 test('5. 大螢幕送出 toPlayer 只能送達同一房間的指定手機', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -229,7 +229,7 @@ test('5. 大螢幕送出 toPlayer 只能送達同一房間的指定手機', asyn
 });
 
 test('6. 手機斷線時，大螢幕收到 playerLeft 通知', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -258,7 +258,7 @@ test('6. 手機斷線時，大螢幕收到 playerLeft 通知', async () => {
 });
 
 test('7. 大螢幕斷線時，手機收到 roomClosed 通知', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -287,7 +287,7 @@ test('7. 大螢幕斷線時，手機收到 roomClosed 通知', async () => {
 });
 
 test('8. 送出惡意非 JSON 垃圾字串或畸形資料時，伺服器不崩潰且能正常處理後續連線', async () => {
-  const server = startServer({ httpPort: 0, httpsPort: null });
+  const server = await startServer({ httpPort: 0, httpsPort: null });
   await server.ready;
   const clients = [];
 
@@ -321,15 +321,42 @@ test('9. 自動產生自簽憑證並成功啟動 HTTPS 伺服器', async () => {
   const testCertDir = path.join(__dirname, 'test_cert');
   try {
     // 測試自簽憑證產生
-    const { key, cert } = getOrCreateCert({ certDir: testCertDir, localIp: '127.0.0.1' });
+    const { key, cert } = await getOrCreateCert({ certDir: testCertDir, localIp: '127.0.0.1' });
     assert.ok(key.includes('BEGIN PRIVATE KEY') || key.includes('BEGIN RSA PRIVATE KEY'));
     assert.ok(cert.includes('BEGIN CERTIFICATE'));
+    assert.ok(fs.existsSync(path.join(testCertDir, 'version.txt')), '應建立 version.txt');
 
     // 啟動含 HTTPS 隨機埠之伺服器
-    const server = startServer({ httpPort: 0, httpsPort: 0, certDir: testCertDir });
+    const server = await startServer({ httpPort: 0, httpsPort: 0, certDir: testCertDir });
     await server.ready;
     assert.ok(server.httpsPort > 0, 'HTTPS 伺服器應綁定大於 0 之埠號');
     await server.close();
+  } finally {
+    try {
+      fs.rmSync(testCertDir, { recursive: true, force: true });
+    } catch (e) {}
+  }
+});
+
+test('10. 憑證資料夾缺少 version.txt 或版本不符時，自動重新產生新版憑證與 version.txt', async () => {
+  const testCertDir = path.join(__dirname, 'test_cert_version');
+  try {
+    fs.mkdirSync(testCertDir, { recursive: true });
+    // 建立模擬舊版憑證（無 version.txt）
+    fs.writeFileSync(path.join(testCertDir, 'key.pem'), 'OLD_KEY', 'utf8');
+    fs.writeFileSync(path.join(testCertDir, 'cert.pem'), 'OLD_CERT', 'utf8');
+
+    const { key, cert } = await getOrCreateCert({ certDir: testCertDir, localIp: '127.0.0.1' });
+    assert.notEqual(key, 'OLD_KEY', '舊憑證應被覆蓋');
+    assert.notEqual(cert, 'OLD_CERT', '舊憑證應被覆蓋');
+    assert.ok(fs.existsSync(path.join(testCertDir, 'version.txt')), '應建立 version.txt');
+    const version = fs.readFileSync(path.join(testCertDir, 'version.txt'), 'utf8').trim();
+    assert.equal(version, 'selfsigned5-sha256-730d');
+
+    // 再次讀取時應直接重用（不重新產生）
+    const cached = await getOrCreateCert({ certDir: testCertDir, localIp: '127.0.0.1' });
+    assert.equal(cached.key, key);
+    assert.equal(cached.cert, cert);
   } finally {
     try {
       fs.rmSync(testCertDir, { recursive: true, force: true });

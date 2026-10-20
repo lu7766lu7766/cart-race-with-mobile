@@ -106,6 +106,12 @@ function showWheelScreen() {
   joinScreen.classList.remove('active');
   wheelScreen.classList.add('active');
   showError('');
+  targetSteer = 0;
+  smoothedSteer = 0;
+  rawTiltDeg = 0;
+  currentDisplayAngle = 0;
+  wheelIcon.style.transform = 'rotate(0deg)';
+  steerDegree.textContent = '0°';
 }
 
 // ------------------------------------------------------------
@@ -134,10 +140,18 @@ function processTilt(degrees) {
 function handleDeviceMotion(e) {
   const acc = e.accelerationIncludingGravity;
   if (!acc) return;
-  hasMotionSensor = true;
 
-  const ax = acc.x || 0;
-  const ay = acc.y || 0;
+  const ax = acc.x;
+  const ay = acc.y;
+
+  // 1. 若 x 或 y 不是有限數字（如桌機 Chrome 傳 null 或空值），直接忽略，
+  // 且不要把 hasMotionSensor 設為 true，讓 deviceorientation 備援能繼續運作。
+  if (!Number.isFinite(ax) || !Number.isFinite(ay)) {
+    return;
+  }
+
+  // 收到有效數值才標記感測器可用
+  hasMotionSensor = true;
 
   // 取得目前螢幕旋轉角度（0, 90, 180, 270）
   let screenAngle = 0;
@@ -162,6 +176,11 @@ function handleDeviceMotion(e) {
     sy = -ay;
   }
 
+  // 2. 重力向量在螢幕平面上的長度 < 3 m/s²（手機幾乎平放或讀數無效）時，忽略這次讀數（維持上一次的角度）
+  if (Math.hypot(sx, sy) < 3) {
+    return;
+  }
+
   // 手機直立橫拿如方向盤時，重力方向朝螢幕下方（-sy）
   // 往右轉動方向盤時，右端向下傾斜，sx > 0，atan2 算出正角
   const rad = Math.atan2(sx, -sy);
@@ -172,15 +191,20 @@ function handleDeviceMotion(e) {
 function handleDeviceOrientation(e) {
   if (hasMotionSensor) return; // 優先使用 devicemotion
 
+  // 檢查 beta / gamma 是否為有限數字
+  if (!Number.isFinite(e.beta) || !Number.isFinite(e.gamma)) {
+    return;
+  }
+
   let screenAngle = screen.orientation?.angle ?? window.orientation ?? 0;
   let tilt = 0;
 
   if (screenAngle === 90) {
-    tilt = e.beta || 0;
+    tilt = e.beta;
   } else if (screenAngle === 270 || screenAngle === -90) {
-    tilt = -(e.beta || 0);
+    tilt = -e.beta;
   } else {
-    tilt = e.gamma || 0;
+    tilt = e.gamma;
   }
 
   rawTiltDeg = tilt;
@@ -336,8 +360,14 @@ function cleanupConnection() {
     ws = null;
   }
 
-  window.removeEventListener('devicemotion', handleDeviceMotion);
-  window.removeEventListener('deviceorientation', handleDeviceOrientation);
+  window.removeEventListener('devicemotion', handleDeviceMotion, true);
+  window.removeEventListener('deviceorientation', handleDeviceOrientation, true);
+
+  hasMotionSensor = false;
+  targetSteer = 0;
+  smoothedSteer = 0;
+  rawTiltDeg = 0;
+  currentDisplayAngle = 0;
 }
 
 // ------------------------------------------------------------

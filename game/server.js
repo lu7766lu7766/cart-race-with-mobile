@@ -65,18 +65,29 @@ export function getLocalIp() {
 // ------------------------------------------------------------
 // 2. HTTPS 自簽憑證管理（儲存於 cert/ 資料夾）
 // ------------------------------------------------------------
-export function getOrCreateCert({ certDir = path.join(__dirname, 'cert'), localIp = getLocalIp() } = {}) {
+const CERT_VERSION = 'selfsigned5-sha256-730d';
+
+export async function getOrCreateCert({ certDir = path.join(__dirname, 'cert'), localIp = getLocalIp() } = {}) {
   const keyPath = path.join(certDir, 'key.pem');
   const certPath = path.join(certDir, 'cert.pem');
+  const versionPath = path.join(certDir, 'version.txt');
 
-  if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+  if (fs.existsSync(keyPath) && fs.existsSync(certPath) && fs.existsSync(versionPath)) {
     try {
-      const key = fs.readFileSync(keyPath, 'utf8');
-      const cert = fs.readFileSync(certPath, 'utf8');
-      if (key && cert) {
-        return { key, cert };
+      const version = fs.readFileSync(versionPath, 'utf8').trim();
+      if (version === CERT_VERSION) {
+        const key = fs.readFileSync(keyPath, 'utf8');
+        const cert = fs.readFileSync(certPath, 'utf8');
+        if (key && cert) {
+          return { key, cert };
+        }
       }
     } catch (e) {}
+  }
+
+  // 舊版憑證或缺少 version.txt 時，重新產生並提示使用者
+  if (fs.existsSync(keyPath) || fs.existsSync(certPath)) {
+    console.log('已重新產生 HTTPS 憑證，手機需要重新同意一次憑證警告');
   }
 
   // 憑證 subjectAltName 只放入合法的 IP（type 7）與 localhost（type 2）
@@ -90,9 +101,15 @@ export function getOrCreateCert({ certDir = path.join(__dirname, 'cert'), localI
     altNames.push({ type: 7, ip: '127.0.0.1' });
   }
 
-  const pems = selfsigned.generate(attrs, {
-    days: 3650,
+  const notBeforeDate = new Date();
+  const notAfterDate = new Date(notBeforeDate);
+  notAfterDate.setDate(notAfterDate.getDate() + 730); // 2 年（iPhone 對自簽憑證有效期較嚴格，不要超過 825 天）
+
+  const pems = await selfsigned.generate(attrs, {
     keySize: 2048,
+    algorithm: 'sha256', // 預設是 sha1，iPhone 會拒絕，一定要指定
+    notBeforeDate,
+    notAfterDate,
     extensions: [{ name: 'subjectAltName', altNames }],
   });
 
@@ -100,6 +117,7 @@ export function getOrCreateCert({ certDir = path.join(__dirname, 'cert'), localI
     fs.mkdirSync(certDir, { recursive: true });
     fs.writeFileSync(keyPath, pems.private, 'utf8');
     fs.writeFileSync(certPath, pems.cert, 'utf8');
+    fs.writeFileSync(versionPath, CERT_VERSION, 'utf8');
   } catch (e) {}
 
   return { key: pems.private, cert: pems.cert };
@@ -372,7 +390,7 @@ export function createRoomHub({ rng = Math.random } = {}) {
 // ------------------------------------------------------------
 // 5. 啟動伺服器（支援 HTTP、HTTPS 與 /ws WebSocket 轉發）
 // ------------------------------------------------------------
-export function startServer({
+export async function startServer({
   port,
   httpPort = port ?? PORT,
   httpsPort = HTTPS_PORT,
@@ -450,7 +468,7 @@ export function startServer({
   const enableHttps = httpsPort !== false && httpsPort !== null;
   if (enableHttps) {
     try {
-      const { key, cert } = getOrCreateCert({ certDir, localIp });
+      const { key, cert } = await getOrCreateCert({ certDir, localIp });
       httpsServer = https.createServer({ key, cert }, reqHandler);
       httpsServer.on('upgrade', handleUpgrade);
     } catch (err) {
@@ -541,5 +559,8 @@ export function startServer({
 // 僅在直接透過 node server.js 執行時自動啟動（若是測試 import 則不自動啟動）
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isDirectRun) {
-  startServer({ port: PORT, httpsPort: HTTPS_PORT });
+  await startServer({ port: PORT, httpsPort: HTTPS_PORT }).catch((err) => {
+    console.error('伺服器啟動失敗：', err);
+    process.exit(1);
+  });
 }
