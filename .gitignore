@@ -2,3 +2,7 @@ node_modules/
 cert/
 .DS_Store
 Thumbs.db
+
+# 瀏覽器自動化測試（Playwright）產生的 console log 與快照
+.playwright-mcp/
+*.log
