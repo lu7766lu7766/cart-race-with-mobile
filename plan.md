@@ -250,7 +250,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 你是我的程式老師，我是初學者。這是一個用 Three.js 寫的網頁賽車遊戲專案（第一階段已完成，可用鍵盤玩）。
 請先閱讀 server.js、public/js/game.js、public/js/network.js 了解專案，然後修改 server.js，加入手機多人連線需要的伺服器功能：
 
-1. 安裝並使用套件：ws（WebSocket）、selfsigned（自簽憑證）、qrcode（產生 QR Code），更新 package.json。
+1. 安裝並使用套件：ws（WebSocket）、selfsigned（自簽憑證）、qrcode（產生 QR Code），更新 package.json。安裝後執行 npm audit，確認沒有 high 等級的安全漏洞。注意：selfsigned 5 版以後的 generate() 是 async，要用 await 取得結果；簽章演算法要指定 algorithm:'sha256'（預設的 sha1 會被 iPhone 拒絕），有效期設 2 年（notAfterDate），不要超過 825 天。
 2. 保留原本 HTTP 3000 埠；另外開 HTTPS 3443 埠，用 selfsigned 產生憑證並存到 cert/ 資料夾，下次啟動直接讀取。兩個埠提供相同的網頁，也都在路徑 /ws 接受 WebSocket 連線（共用同一套處理程式）。
 3. 新增 GET /api/server-info，回傳 JSON：{ controllerUrl: "https://<本機區網IPv4>:3443/controller.html", qrSvg: <controllerUrl 的 QR Code SVG 字串> }。區網 IP 用 os.networkInterfaces() 找，排除 127.0.0.1 和虛擬網卡。
 4. 房間功能，訊息一律是 JSON：
@@ -259,9 +259,10 @@ game.on('playerFinished', ({ player, rank, time }) => …)
    - 手機送 {type:'input', steer, throttle, brake, item} → 加上 playerId 轉給該房間的大螢幕
    - 大螢幕送 {type:'toPlayer', playerId, data} → 把 data 原封不動轉給那支手機
    - 手機斷線 → 通知大螢幕 {type:'playerLeft', playerId}；大螢幕斷線 → 通知所有手機 {type:'roomClosed'} 並刪除房間
-   - 每 15 秒對每個連線送 ping，沒有回 pong 的連線就關閉（處理手機休眠的半開連線）
+   - 每 15 秒對每個連線送 ping，沒有回 pong 的連線就關閉（處理手機休眠的半開連線）；關閉伺服器時要 clearInterval 清掉這個計時器，否則程式（和測試）結束不了
+   - 同一個連線重複送 host 或 join 時，先清掉它原本的身分再處理，避免房間裡留下沒人操作的玩家
    - 收到格式錯誤的訊息要忽略，不能讓伺服器當掉
-5. 啟動時在終端機用中文印出：大螢幕網址 http://localhost:3000 與手機網址 https://<區網IP>:3443/controller.html。
+5. 啟動時在終端機用中文印出：大螢幕網址 http://localhost:3000 與手機網址 https://<區網IP>:3443/controller.html。如果 3000 或 3443 埠已被使用（例如上一個伺服器沒關），用中文提示「連接埠已被使用，請先關閉另一個伺服器」後結束，不要丟出英文錯誤堆疊。
 
 請在程式裡加詳細的中文註解。完成後告訴我要執行哪些指令，以及怎麼確認成功。
 ```
@@ -281,6 +282,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
    - 若 throttle > 0.5 且 brake > 0.5，視為按住甩尾（drift = true）
    - item 是手機端的累加計數器，數字比上次大時，下一次 getState() 回傳 useItem:true（只出現一次）
    - 超過 500 毫秒沒收到輸入就把 steer/throttle/brake 歸零（避免斷線時車子一直衝）
+   - 提供 reset() 函式，只清掉還沒被讀取的道具觸發（遊戲在 GO 開跑那一刻會呼叫它）
 4. 收到 playerJoined → game.addPlayer({ name, kind:'remote', input: new RemoteInput() })，用 Map<serverPlayerId, gamePlayer> 記住對應關係。
    - 加入成功後立刻送一次 status 給該手機：{type:'toPlayer', playerId, data: {type:'status', ...game.getStatus(player.id)}}（包含 itemLevel）
    - 如果 addPlayer 回傳 null（已滿額），就送 toPlayer 錯誤訊息給手機：{type:'toPlayer', playerId, data: {type:'error', message:'房間已滿（4 位真人）'}}
@@ -289,7 +291,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
    - itemChanged、positionChanged、lapChanged：只傳給該玩家 {type:'toPlayer', playerId, data: {type:'status', ...game.getStatus(player.id)}}（帶有最新 itemLevel）
    - stateChanged：對所有已連線的手機廣播目前狀態 {type:'status', ...game.getStatus(p.id)}
    - playerHit：另外送 {type:'toPlayer', playerId, data: {type:'vibrate', ms:300}}
-6. WebSocket 斷線時：對所有遠端玩家呼叫 game.removePlayer 並清空 Map，大廳顯示「連線中斷，重新連線中…」（呼叫 game.setRoomInfo({ code: null, message: '連線中斷，重新連線中…' })），每 2 秒自動重連並重新建立房間。
+6. WebSocket 斷線時（一定要做，否則重連後大廳會殘留舊玩家）：對所有遠端玩家呼叫 game.removePlayer 並清空 Map，大廳顯示「連線中斷，重新連線中…」並清掉舊的 QR Code（呼叫 game.setRoomInfo({ code: null, url: null, qrSvg: null, message: '連線中斷，重新連線中…' })），每 2 秒自動重連並重新建立房間。
 
 不要修改遊戲物理與畫面邏輯，只改 network.js。請加詳細中文註解，完成後告訴我怎麼確認成功。
 ```
@@ -303,7 +305,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 畫面一「加入房間」：
 - 房號輸入框（4 位數字，使用數字鍵盤）、暱稱輸入框（最多 8 字，記在 localStorage）、「開始」大按鈕。
-- 按下「開始」時（一定要在點擊事件裡第一步執行）：先呼叫 DeviceMotionEvent.requestPermission() 與 DeviceOrientationEvent.requestPermission() 取得感測器權限（iOS）；之後嘗試進入全螢幕、鎖定橫向、使用 Wake Lock 讓螢幕不會變暗（各自包 try/catch，失敗不影響加入）。
+- 按下「開始」時（一定要在點擊事件裡第一步執行）：先呼叫 DeviceMotionEvent.requestPermission() 與 DeviceOrientationEvent.requestPermission() 取得感測器權限（iOS；呼叫前先檢查 typeof DeviceMotionEvent.requestPermission === 'function'，Android 和電腦沒有這個函式）。「開始」按鈕在這一步之前就先停用，避免連點重複加入；之後嘗試進入全螢幕、鎖定橫向、使用 Wake Lock 讓螢幕不會變暗（各自包 try/catch，失敗不影響加入）。
 - 如果 window.isSecureContext 是 false，顯示中文提示：必須用 https 網址開啟。
 - 加入後任何時候收到 error，都要停止發送 input、關閉 WebSocket、回到畫面一並顯示錯誤訊息。
 
@@ -322,6 +324,8 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 - 用 devicemotion 的 accelerationIncludingGravity（重力方向）。依 screen.orientation.angle（0/90/-90/270）把 x、y 轉成螢幕座標，再用 Math.atan2 算出手機像方向盤一樣左右轉的角度
 - 扣掉校正角度，3 度以內當 0，±35 度對應 steer -1 ～ +1，並做平滑處理（低通濾波）
 - 不支援 devicemotion 時，改用 deviceorientation 的 beta/gamma 估算
+- 重力的 x、y 不是有效數字（null）或重力在螢幕平面上很小（手機平放）時，忽略這次讀數；收到第一筆有效讀數前 steer 一律是 0（否則 atan2(0,0) 會算出 180°，車子一開跑就滿舵打轉）
+- 道具按鈕不要加 disabled（disabled 的按鈕按不到）；沒有道具時用灰色表示即可。每次加入成功時把道具計數器與按鈕狀態歸零
 
 其他：
 - 收到 vibrate 時呼叫 navigator.vibrate(ms)；不支援震動（iPhone）時讓畫面閃紅色
