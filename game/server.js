@@ -246,8 +246,8 @@ export function createRoomHub({ rng = Math.random } = {}) {
     // (A) 大螢幕建立房間：{ type: 'host' }
     // --------------------------------------------------------
     if (msg.type === 'host') {
-      // 若該 socket 過去已建立過房間，先關閉舊房間
-      if (socket.roomCode && rooms.has(socket.roomCode)) {
+      // 若該 socket 過去已建立過房間或為玩家身分，先清理舊身分
+      if (socket.roomRole === 'player' || socket.roomRole === 'host' || (socket.roomCode && rooms.has(socket.roomCode))) {
         handleClose(socket);
       }
 
@@ -271,6 +271,11 @@ export function createRoomHub({ rng = Math.random } = {}) {
     // (B) 手機加入房間：{ type: 'join', code, name }
     // --------------------------------------------------------
     if (msg.type === 'join') {
+      // 若該 socket 過去已有玩家或主機身分，先呼叫 handleClose 清理舊身分（避免重複 join 留下幽靈玩家）
+      if (socket.roomRole === 'player' || socket.roomRole === 'host') {
+        handleClose(socket);
+      }
+
       const code = String(msg.code || '').trim();
       const room = rooms.get(code);
 
@@ -361,7 +366,12 @@ export function createRoomHub({ rng = Math.random } = {}) {
   function handleClose(socket) {
     if (!socket || !socket.roomCode) return;
     const room = rooms.get(socket.roomCode);
-    if (!room) return;
+    if (!room) {
+      socket.roomRole = null;
+      socket.roomCode = null;
+      socket.playerId = null;
+      return;
+    }
 
     if (socket.roomRole === 'host') {
       // 大螢幕斷線：通知該房間所有手機 roomClosed，並清理房間
@@ -369,14 +379,21 @@ export function createRoomHub({ rng = Math.random } = {}) {
         send(player.socket, { type: 'roomClosed' });
         player.socket.roomCode = null;
         player.socket.roomRole = null;
+        player.socket.playerId = null;
       }
       rooms.delete(socket.roomCode);
+      socket.roomRole = null;
+      socket.roomCode = null;
+      socket.playerId = null;
     } else if (socket.roomRole === 'player') {
       // 手機玩家斷線：從房間移除並通知大螢幕
       if (room.players.has(socket.playerId)) {
         room.players.delete(socket.playerId);
         send(room.hostSocket, { type: 'playerLeft', playerId: socket.playerId });
       }
+      socket.roomRole = null;
+      socket.roomCode = null;
+      socket.playerId = null;
     }
   }
 
@@ -479,11 +496,54 @@ export async function startServer({
   let isHttpListening = false;
   let isHttpsListening = false;
 
-  const readyPromise = new Promise((resolve) => {
+  const readyPromise = new Promise((resolve, reject) => {
     let pending = enableHttps && httpsServer ? 2 : 1;
+    let settled = false;
+
+    function cleanupOnError() {
+      clearInterval(heartbeatInterval);
+      for (const client of wss.clients) {
+        try { client.terminate(); } catch (e) {}
+      }
+      try { wss.close(); } catch (e) {}
+      if (isHttpListening) {
+        try { httpServer.close(); } catch (e) {}
+      }
+      if (isHttpsListening && httpsServer) {
+        try { httpsServer.close(); } catch (e) {}
+      }
+    }
+
+    function handleError(targetPort, err) {
+      if (settled) return;
+      settled = true;
+
+      cleanupOnError();
+
+      if (err && err.code === 'EADDRINUSE') {
+        console.error(`連接埠 ${targetPort} 已被使用：可能已經有一個遊戲伺服器在執行，請先關閉它（Ctrl + C）或重新開機`);
+      }
+
+      reject(err);
+    }
+
+    httpServer.on('error', (err) => {
+      handleError(httpPort, err);
+    });
+
+    if (enableHttps && httpsServer) {
+      httpsServer.on('error', (err) => {
+        handleError(httpsPort, err);
+      });
+    }
+
     const checkDone = () => {
+      if (settled) return;
       pending--;
-      if (pending === 0) resolve();
+      if (pending === 0) {
+        settled = true;
+        resolve();
+      }
     };
 
     httpServer.listen(httpPort, () => {
@@ -500,17 +560,17 @@ export async function startServer({
     }
   });
 
-  readyPromise.then(() => {
-    const actualHttpPort = httpServer.address().port;
-    console.log('');
-    console.log('  🏁 賽車遊戲伺服器已啟動！');
-    console.log(`  👉 大螢幕用瀏覽器打開：http://localhost:${actualHttpPort}`);
-    if (httpsServer && isHttpsListening) {
-      console.log(`  📱 手機控制器網址：https://${localIp}:${actualHttpsPort}/controller.html`);
-    }
-    console.log('  （要關閉伺服器請按 Ctrl + C）');
-    console.log('');
-  });
+  await readyPromise;
+
+  const actualHttpPort = httpServer.address()?.port;
+  console.log('');
+  console.log('  🏁 賽車遊戲伺服器已啟動！');
+  console.log(`  👉 大螢幕用瀏覽器打開：http://localhost:${actualHttpPort}`);
+  if (httpsServer && isHttpsListening) {
+    console.log(`  📱 手機控制器網址：https://${localIp}:${actualHttpsPort}/controller.html`);
+  }
+  console.log('  （要關閉伺服器請按 Ctrl + C）');
+  console.log('');
 
   const handle = {
     httpServer,
@@ -559,8 +619,12 @@ export async function startServer({
 // 僅在直接透過 node server.js 執行時自動啟動（若是測試 import 則不自動啟動）
 const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isDirectRun) {
-  await startServer({ port: PORT, httpsPort: HTTPS_PORT }).catch((err) => {
-    console.error('伺服器啟動失敗：', err);
+  try {
+    await startServer({ port: PORT, httpsPort: HTTPS_PORT });
+  } catch (err) {
+    if (err?.code !== 'EADDRINUSE') {
+      console.error('伺服器啟動失敗：', err);
+    }
     process.exit(1);
-  });
+  }
 }

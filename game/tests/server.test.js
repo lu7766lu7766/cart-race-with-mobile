@@ -8,6 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { WebSocket } from 'ws';
 import { startServer, getLocalIp, getOrCreateCert } from '../server.js';
 import fs from 'node:fs';
@@ -361,5 +362,77 @@ test('10. 憑證資料夾缺少 version.txt 或版本不符時，自動重新產
     try {
       fs.rmSync(testCertDir, { recursive: true, force: true });
     } catch (e) {}
+  }
+});
+
+test('11. 同一個手機 socket 連續送兩次 join，大螢幕只保留一個玩家且斷線後人數為 0', async () => {
+  const server = await startServer({ httpPort: 0, httpsPort: null });
+  await server.ready;
+  const clients = [];
+
+  try {
+    const host = await connectClient(server.httpPort);
+    clients.push(host);
+    host.send(JSON.stringify({ type: 'host' }));
+    const { code } = await waitForMessage(host, (m) => m.type === 'roomCreated');
+
+    const phone = await connectClient(server.httpPort);
+    clients.push(phone);
+
+    // 第一次 join
+    phone.send(JSON.stringify({ type: 'join', code, name: '測試玩家1' }));
+    const join1 = await waitForMessage(phone, (m) => m.type === 'joined');
+    const hostJoin1 = await waitForMessage(host, (m) => m.type === 'playerJoined');
+    assert.equal(join1.playerId, hostJoin1.playerId);
+
+    const room = server.hub.rooms.get(code);
+    assert.equal(room.players.size, 1);
+
+    // 第二次 join（同一個 socket 連線）
+    phone.send(JSON.stringify({ type: 'join', code, name: '測試玩家2' }));
+    const join2 = await waitForMessage(phone, (m) => m.type === 'joined');
+    assert.notEqual(join2.playerId, join1.playerId, '重新 join 應取得新的 playerId');
+
+    // 檢查房內人數維持 1，沒有殘留幽靈玩家
+    assert.equal(room.players.size, 1, '房內玩家數應維持 1 人');
+    assert.ok(room.players.has(join2.playerId), '房內應只保留最新 join 的玩家');
+    assert.equal(room.players.has(join1.playerId), false, '舊 playerId 應已被清除');
+
+    // 手機斷線
+    phone.terminate();
+    const leftMsg = await waitForMessage(host, (m) => m.type === 'playerLeft');
+    assert.equal(leftMsg.playerId, join2.playerId);
+
+    // 確認斷線後房內人數為 0
+    assert.equal(room.players.size, 0, '斷線後房內人數應為 0');
+  } finally {
+    for (const c of clients) {
+      try { c.terminate(); } catch (e) {}
+    }
+    await server.close();
+  }
+});
+
+test('12. 通訊埠被占用（EADDRINUSE）時，startServer 應 reject 而非拋出未處理例外崩潰', async () => {
+  // 先建立一個原生 HTTP 伺服器占用一個隨機通訊埠
+  const dummyServer = http.createServer();
+  await new Promise((resolve) => dummyServer.listen(0, resolve));
+  const occupiedPort = dummyServer.address().port;
+
+  try {
+    // 以同一個已占用的埠啟動 startServer，應 reject
+    await assert.rejects(
+      async () => {
+        const s = await startServer({ httpPort: occupiedPort, httpsPort: null });
+        await s.ready;
+      },
+      (err) => {
+        assert.equal(err.code, 'EADDRINUSE');
+        return true;
+      },
+      'startServer 遇到通訊埠被占用時應 reject EADDRINUSE 錯誤'
+    );
+  } finally {
+    await new Promise((resolve) => dummyServer.close(resolve));
   }
 });

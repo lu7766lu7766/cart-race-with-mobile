@@ -95,6 +95,8 @@ function showError(text) {
 function showJoinScreen(errorMessage = '') {
   wheelScreen.classList.remove('active');
   joinScreen.classList.add('active');
+  btnStart.disabled = false;
+  btnStart.textContent = '開始連線 🏁';
   if (errorMessage) {
     showError(errorMessage);
   }
@@ -228,7 +230,7 @@ function setupTouchEvents() {
     btnInvert.textContent = invertSteer ? '反轉 🟢' : '反轉 🔄';
   });
 
-  // 道具按鈕點擊：計數器累加 1
+  // 道具按鈕點擊：計數器累加 1（移除 disabled 後可即時觸發）
   btnItem.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -240,6 +242,9 @@ function setupTouchEvents() {
     btnItem.style.transform = '';
   });
   btnItem.addEventListener('pointercancel', () => {
+    btnItem.style.transform = '';
+  });
+  btnItem.addEventListener('pointerleave', () => {
     btnItem.style.transform = '';
   });
 
@@ -347,6 +352,12 @@ function triggerFeedback(ms = 300) {
 // ------------------------------------------------------------
 function cleanupConnection() {
   isConnected = false;
+  isThrottlePressed = false;
+  isBrakePressed = false;
+  itemCounter = 0;
+  if (btnThrottle) btnThrottle.classList.remove('active');
+  if (btnBrake) btnBrake.classList.remove('active');
+
   if (inputInterval) {
     clearInterval(inputInterval);
     inputInterval = null;
@@ -381,6 +392,10 @@ btnStart.addEventListener('click', async () => {
     showError('請輸入大螢幕上的 4 位數房號！');
     return;
   }
+
+  // 一開始立即停用按鈕，避免使用者連續點擊造成重複連線或重複 join
+  btnStart.disabled = true;
+  btnStart.textContent = '連線中… ⏳';
 
   showError('');
   if (name) {
@@ -431,17 +446,14 @@ btnStart.addEventListener('click', async () => {
   try {
     ws = new WebSocket(wsUrl);
   } catch (err) {
+    btnStart.disabled = false;
+    btnStart.textContent = '開始連線 🏁';
     showError('無法建立 WebSocket 連線：' + err.message);
     return;
   }
 
-  btnStart.disabled = true;
-  btnStart.textContent = '連線中… ⏳';
-
   ws.onopen = () => {
-    btnStart.disabled = false;
-    btnStart.textContent = '開始連線 🏁';
-    // 發送加入房間請求
+    // 發送加入房間請求（按鈕維持 disabled 直到 joined 或收到 error/中斷）
     ws.send(JSON.stringify({
       type: 'join',
       code,
@@ -460,6 +472,17 @@ btnStart.addEventListener('click', async () => {
     // 成功加入房間
     if (msg.type === 'joined') {
       isConnected = true;
+      // 重設道具計數器與操控狀態，確保重新加入時不誤放道具、不殘留先前輸入
+      itemCounter = 0;
+      isThrottlePressed = false;
+      isBrakePressed = false;
+      targetSteer = 0;
+      smoothedSteer = 0;
+      rawTiltDeg = 0;
+      currentDisplayAngle = 0;
+      if (btnThrottle) btnThrottle.classList.remove('active');
+      if (btnBrake) btnBrake.classList.remove('active');
+
       showWheelScreen();
 
       // 掛載陀螺儀監聽

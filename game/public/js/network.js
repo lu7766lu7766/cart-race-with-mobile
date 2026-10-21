@@ -137,7 +137,7 @@ export function initNetwork(game) {
             });
           })
           .catch(() => {
-            game.setRoomInfo({ code, message: null });
+            game.setRoomInfo({ code, url: null, qrSvg: null, message: null });
           });
         return;
       }
@@ -221,8 +221,8 @@ export function initNetwork(game) {
     }
     playerMap.clear();
 
-    // 大廳顯示連線中斷訊息
-    game.setRoomInfo({ code: null, message: '連線中斷，重新連線中…' });
+    // 大廳顯示連線中斷訊息，清除失效的房號、QR Code 與網址
+    game.setRoomInfo({ code: null, url: null, qrSvg: null, message: '連線中斷，重新連線中…' });
 
     // 2 秒後自動重試連線
     setTimeout(() => {

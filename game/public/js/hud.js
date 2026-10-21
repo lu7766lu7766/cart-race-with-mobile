@@ -45,6 +45,7 @@ export class HUD {
           <div class="room-code-value" id="roomCode">----</div>
           <div class="room-status-note" id="roomNote">本機模式：第二階段開放手機加入</div>
           <div class="room-qr-box" id="roomQr" style="display:none;"></div>
+          <div class="room-url" id="roomUrl" style="display:none;"></div>
           <div class="room-message" id="roomMsg"></div>
         </div>
         <div class="slots-container" id="playerSlots"></div>
@@ -235,6 +236,7 @@ export class HUD {
     const roomCodeEl = this.root.querySelector('#roomCode');
     const roomNoteEl = this.root.querySelector('#roomNote');
     const roomQrEl = this.root.querySelector('#roomQr');
+    const roomUrlEl = this.root.querySelector('#roomUrl');
     const roomMsgEl = this.root.querySelector('#roomMsg');
 
     if (roomCodeEl) roomCodeEl.textContent = roomInfo.code || '----';
@@ -250,7 +252,17 @@ export class HUD {
         }
       } else {
         roomQrEl.style.display = 'none';
+        roomQrEl.innerHTML = '';
         this._lastQr = null;
+      }
+    }
+    if (roomUrlEl) {
+      if (roomInfo.url) {
+        roomUrlEl.style.display = 'block';
+        roomUrlEl.textContent = roomInfo.url;
+      } else {
+        roomUrlEl.style.display = 'none';
+        roomUrlEl.textContent = '';
       }
     }
     if (roomMsgEl) roomMsgEl.textContent = roomInfo.message || '';
