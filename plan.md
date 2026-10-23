@@ -234,7 +234,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 ### 6.4 手機控制器（`public/controller.html`＋`js/controller.js`）
 - **步驟 1**：輸入房號（數字鍵盤）＋暱稱 →「開始」按鈕。按下時（必須在使用者點擊當下）呼叫 `DeviceMotionEvent.requestPermission()` / `DeviceOrientationEvent.requestPermission()`（iOS），並嘗試全螢幕、鎖定橫向、Wake Lock 防止螢幕變暗。
 - **步驟 2（橫向）**：左半邊大按鈕「倒退」、右半邊大按鈕「油門」、中央圓形道具鈕（顯示 ⚡🍌🚀🛡️ 或空，道具鈕顯示 ★ 等級）；同時按油門＋倒退時兩個都送 1，大螢幕會當成甩尾；上方顯示名次/圈數，背景為車色；方向盤圖示即時顯示傾斜角度；「校正」與「反轉方向」小按鈕。直拿時顯示「請把手機轉橫」。
-- **轉向演算法**：用 `devicemotion` 的 `accelerationIncludingGravity`（重力向量），依 `screen.orientation.angle` 換算成螢幕座標，算出 `atan2` 傾斜角；扣掉校正值、3° 死區，±35° 對應 steer -1～+1，並做低通濾波。沒有 devicemotion 時退回 `deviceorientation`。
+- **轉向演算法**：用 `devicemotion` 的 `accelerationIncludingGravity`（重力向量），依 `screen.orientation.angle` 換算成螢幕座標，算出 `atan2` 傾斜角；扣掉校正值、5° 死區，±45° 對應 steer -1～+1（小角度用曲線壓低），並做低通濾波。沒有 devicemotion 時退回 `deviceorientation`。
 - 觸控用 `touchstart/touchend`＋`preventDefault`，支援多指同時按（油門＋道具），並停用縮放與長按選取。
 - 收到 `vibrate` 時呼叫 `navigator.vibrate`（iOS 不支援時改用畫面閃紅）。
 
@@ -322,7 +322,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 轉向計算：
 - 用 devicemotion 的 accelerationIncludingGravity（重力方向）。依 screen.orientation.angle（0/90/-90/270）把 x、y 轉成螢幕座標，再用 Math.atan2 算出手機像方向盤一樣左右轉的角度
-- 扣掉校正角度，3 度以內當 0，±35 度對應 steer -1 ～ +1，並做平滑處理（低通濾波）
+- 扣掉校正角度，5 度以內當 0，±45 度對應 steer -1 ～ +1；小角度用曲線壓低（例如 0.4n + 0.6n²，n 為 0～1 的傾斜比例），避免轉向太敏感，並做平滑處理（低通濾波）
 - 不支援 devicemotion 時，改用 deviceorientation 的 beta/gamma 估算
 - 重力的 x、y 不是有效數字（null）或重力在螢幕平面上很小（手機平放）時，忽略這次讀數；收到第一筆有效讀數前 steer 一律是 0（否則 atan2(0,0) 會算出 180°，車子一開跑就滿舵打轉）
 - 道具按鈕不要加 disabled（disabled 的按鈕按不到）；沒有道具時用灰色表示即可。每次加入成功時把道具計數器與按鈕狀態歸零

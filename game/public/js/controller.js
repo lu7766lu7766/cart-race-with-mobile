@@ -123,15 +123,16 @@ function processTilt(degrees) {
   currentDisplayAngle = degrees - calibrationAngle;
   let effective = currentDisplayAngle * (invertSteer ? -1 : 1);
 
-  // 3 度以內死區判定
-  if (Math.abs(effective) <= 3) {
+  // 5 度以內死區判定
+  if (Math.abs(effective) <= 5) {
     effective = 0;
   } else {
-    effective = effective > 0 ? effective - 3 : effective + 3;
+    effective = effective > 0 ? effective - 5 : effective + 5;
   }
 
-  // ±35 度對應 -1 ～ +1 轉向
-  targetSteer = Math.max(-1, Math.min(1, effective / 32));
+  // ±45 度對應 -1 ～ +1 轉向；小角度用平方曲線壓低，微調時比較不會一下打太多
+  const n = Math.min(1, Math.abs(effective) / 40);
+  targetSteer = Math.sign(effective) * (0.4 * n + 0.6 * n * n);
 
   // 視覺方向盤即時跟隨旋轉
   const rotateDeg = Math.round(effective);
@@ -301,8 +302,8 @@ function setupTouchEvents() {
   // 電腦端鍵盤除錯支援（A/D 轉向、W 油門、S 煞車、Space 道具）
   window.addEventListener('keydown', (e) => {
     if (!isConnected) return;
-    if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') processTilt(-30);
-    if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') processTilt(30);
+    if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') processTilt(-45);
+    if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') processTilt(45);
     if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
       isThrottlePressed = true;
       btnThrottle.classList.add('active');
