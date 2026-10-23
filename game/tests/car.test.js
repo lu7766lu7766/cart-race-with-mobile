@@ -263,3 +263,53 @@ test('兩台車重疊放置並全油門前進 2 秒不會卡死：兩台均前�
     `車B 應前進 > 30 單位，實際前進 ${deltaProgressB.toFixed(1)}`
   );
 });
+
+// 每步把車放回直道中心線並固定車頭方向，只測逆向判定（不受轉彎、撞牆影響）
+function driveOnStraight(car, track, { reversed, throttle = 0, brake = 0, steps }) {
+  const s0 = track.sampleAt(0);
+  const forward = Math.atan2(s0.tangent.x, s0.tangent.z);
+  for (let i = 0; i < steps; i++) {
+    car.trackIndex = 0;
+    car.lateral = 0;
+    car.x = s0.point.x;
+    car.z = s0.point.z;
+    car.y = s0.height;
+    car.heading = reversed ? forward + Math.PI : forward;
+    car.update(1 / 60, { steer: 0, throttle, brake }, track);
+  }
+}
+
+test('逆向行駛：車頭朝反方向往前開，持續 WRONG_WAY_DELAY 秒後才警告，掉頭後解除', () => {
+  const track = new Track();
+  const car = new Car({ slot: 0, track });
+
+  // 正向全油門不會警告
+  driveOnStraight(car, track, { reversed: false, throttle: 1, steps: 120 });
+  assert.equal(car.wrongWay, false);
+
+  // 掉頭往前開：未滿延遲時間前不警告，超過後警告
+  const delaySteps = Math.round(CONFIG.WRONG_WAY_DELAY * 60);
+  driveOnStraight(car, track, { reversed: true, throttle: 1, steps: delaySteps - 6 });
+  assert.equal(car.wrongWay, false, '逆向未滿延遲時間不應立刻警告');
+  driveOnStraight(car, track, { reversed: true, throttle: 1, steps: 12 });
+  assert.equal(car.wrongWay, true, '逆向持續超過延遲時間應警告');
+
+  // 轉回正向後警告解除
+  driveOnStraight(car, track, { reversed: false, throttle: 1, steps: 60 });
+  assert.equal(car.wrongWay, false, '回到正向後應解除警告');
+});
+
+test('逆向行駛：車頭朝前倒車、或逆向但幾乎靜止，都不算逆向', () => {
+  const track = new Track();
+  const car = new Car({ slot: 0, track });
+
+  // 車頭朝前倒車
+  driveOnStraight(car, track, { reversed: false, brake: 1, steps: 120 });
+  assert.ok(car.speed < 0, '應處於倒車狀態');
+  assert.equal(car.wrongWay, false);
+
+  // 車頭朝後、停在原地
+  car.speed = 0;
+  driveOnStraight(car, track, { reversed: true, steps: 120 });
+  assert.equal(car.wrongWay, false);
+});

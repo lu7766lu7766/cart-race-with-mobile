@@ -128,10 +128,79 @@ export class OverviewCamera {
     this.camera.updateProjectionMatrix();
   }
 
-  // 全場俯視（框住整條賽道）
+  // 全場俯視（依目前畫面比例算出剛好框住整條賽道的距離，讓賽道盡量放大）
   updateOverview() {
-    this.camera.position.set(0, 360, 260);
-    this.camera.lookAt(0, 0, -10);
+    const bounds = this._trackBounds();
+    if (!bounds) {
+      this.camera.position.set(0, 360, 260);
+      this.camera.lookAt(0, 0, -10);
+      this.camera.updateProjectionMatrix();
+      return;
+    }
+
+    // 從斜上方俯視（仰角約 60 度），水平與垂直方向各自需要的距離取較大者
+    const elevation = Math.PI / 3;
+    const margin = 1.08;
+    const vHalf = THREE.MathUtils.degToRad(this.camera.fov) / 2;
+    const hHalf = Math.atan(Math.tan(vHalf) * this.camera.aspect);
+    const distForWidth = (bounds.halfW * margin) / Math.tan(hHalf) + bounds.halfD * Math.cos(elevation);
+    const distForDepth = (bounds.halfD * Math.sin(elevation) * margin) / Math.tan(vHalf) + bounds.halfD * Math.cos(elevation);
+    let dist = Math.max(distForWidth, distForDepth);
+
+    // 畫面比例沒變就沿用上次算好的距離
+    if (this._fitAspect === this.camera.aspect) {
+      dist = this._fitDist;
+    } else {
+      this._placeOverview(bounds, elevation, dist);
+      // 估算式偏保守：實際投影賽道點，依最外側點佔畫面的比例再縮放一次距離，讓賽道中心線填滿約 82%（留空間給路面寬度與玩家標記）
+      this.camera.updateMatrixWorld();
+      let extent = 0;
+      const v = new THREE.Vector3();
+      const points = this.track.points;
+      for (let i = 0; i < points.length; i += 4) {
+        v.set(points[i].x, 0, points[i].z).project(this.camera);
+        extent = Math.max(extent, Math.abs(v.x), Math.abs(v.y));
+      }
+      if (extent > 0) dist *= extent / 0.82;
+      this._fitAspect = this.camera.aspect;
+      this._fitDist = dist;
+    }
+
+    this._placeOverview(bounds, elevation, dist);
+  }
+
+  _placeOverview(bounds, elevation, dist) {
+    this.camera.position.set(
+      bounds.cx,
+      dist * Math.sin(elevation),
+      bounds.cz + dist * Math.cos(elevation)
+    );
+    this.camera.lookAt(bounds.cx, 0, bounds.cz);
     this.camera.updateProjectionMatrix();
+  }
+
+  // 賽道 XZ 包圍盒（含路面與路肩寬度，只算一次）
+  _trackBounds() {
+    if (this._bounds !== undefined) return this._bounds;
+    const points = this.track?.points;
+    if (!points || points.length === 0) {
+      this._bounds = null;
+      return null;
+    }
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+    }
+    const edge = CONFIG.TRACK_WIDTH / 2 + CONFIG.SHOULDER;
+    this._bounds = {
+      cx: (minX + maxX) / 2,
+      cz: (minZ + maxZ) / 2,
+      halfW: (maxX - minX) / 2 + edge,
+      halfD: (maxZ - minZ) / 2 + edge,
+    };
+    return this._bounds;
   }
 }

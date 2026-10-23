@@ -5,6 +5,7 @@
 //  已移除舊版 CSS2DRenderer，車頂姓名改由 3D 空間之 Sprite 渲染。
 // ============================================================
 
+import * as THREE from 'three';
 import { CONFIG, KARTS, ITEMS } from './config.js';
 import { formatTime, clamp, getViewportRects, escapeHtml } from './utils.js';
 
@@ -112,7 +113,16 @@ export class HUD {
             <div class="cell-drift-bar-fill"></div>
           </div>
         </div>
+        <div class="cell-player-tag" style="display:none;">
+          <span class="cell-player-num"></span>
+          <span class="cell-player-name"></span>
+        </div>
         <div class="cell-hit-flash" style="display:none;"></div>
+        <div class="cell-wrong-way" style="display:none;">
+          <div class="cell-wrong-way-icon">⟲</div>
+          <div class="cell-wrong-way-text">逆向行駛！</div>
+          <div class="cell-wrong-way-sub">請掉頭往回開</div>
+        </div>
         <div class="cell-finish-badge" style="display:none;">FINISH!</div>
       `;
       this.cellPanelsContainer.appendChild(panel);
@@ -127,6 +137,14 @@ export class HUD {
     this.minimapCanvas.height = 110;
     this.minimapCtx = this.minimapCanvas.getContext('2d');
     this.racingEl.appendChild(this.minimapCanvas);
+
+    // 全場俯視格的玩家標記層（3 人模式第 4 格：在 3D 俯視畫面上疊大號碼圓點與名字）
+    this.overviewCanvas = document.createElement('canvas');
+    this.overviewCanvas.className = 'overview-marker-canvas';
+    this.overviewCanvas.style.display = 'none';
+    this.overviewCtx = this.overviewCanvas.getContext('2d');
+    this.racingEl.appendChild(this.overviewCanvas);
+    this.overviewCamera = null;
 
     this.root.appendChild(this.racingEl);
 
@@ -180,6 +198,11 @@ export class HUD {
       offsetX: canvas.width / 2 - ((minX + maxX) / 2) * scale,
       offsetZ: canvas.height / 2 - ((minZ + maxZ) / 2) * scale,
     };
+  }
+
+  // 由 main.js 傳入全場俯視相機，供標記層把 3D 座標投影到畫面
+  setOverviewCamera(camera) {
+    this.overviewCamera = camera;
   }
 
   // 依真人數量與視窗尺寸調整小地圖定位
@@ -465,6 +488,19 @@ export class HUD {
 
       const car = racer.car;
 
+      // 0. 分割畫面時以玩家顏色描邊整格，並在上方中央顯示號碼名牌（號碼同車尾旗與俯視圖標記）
+      const tagEl = panel.querySelector('.cell-player-tag');
+      if (isSplit) {
+        panel.style.boxShadow = `inset 0 0 0 4px ${racer.color}`;
+        tagEl.style.display = 'flex';
+        tagEl.style.background = racer.color;
+        tagEl.querySelector('.cell-player-num').textContent = String(racer.slot + 1);
+        tagEl.querySelector('.cell-player-name').textContent = racer.name;
+      } else {
+        panel.style.boxShadow = 'none';
+        tagEl.style.display = 'none';
+      }
+
       // 1. 名次、圈數與分割畫面獨立比賽時間
       const posEl = panel.querySelector('.cell-pos');
       const lapEl = panel.querySelector('.cell-lap');
@@ -537,6 +573,12 @@ export class HUD {
         flashEl.style.display = (car.hitFlashTimer > 0) ? 'block' : 'none';
       }
 
+      // 5-1. 逆向行駛警告
+      const wrongWayEl = panel.querySelector('.cell-wrong-way');
+      if (wrongWayEl) {
+        wrongWayEl.style.display = car.wrongWay ? 'flex' : 'none';
+      }
+
       // 6. 完賽大字徽章
       const finishBadge = panel.querySelector('.cell-finish-badge');
       if (finishBadge) {
@@ -551,6 +593,122 @@ export class HUD {
 
     // 7. 小地圖繪製
     this._renderMinimap();
+
+    // 8. 3 人模式第 4 格全場俯視的玩家標記
+    if (count === 3 && rects[3]) {
+      this._renderOverviewMarkers(rects[3]);
+    } else {
+      this.overviewCanvas.style.display = 'none';
+    }
+  }
+
+  // 在全場俯視格疊上大號玩家標記（俯視鏡頭很遠，3D 車身只剩幾個像素）
+  _renderOverviewMarkers(rect) {
+    const cam = this.overviewCamera;
+    if (!cam) return;
+
+    const canvas = this.overviewCanvas;
+    const ctx = this.overviewCtx;
+    canvas.style.display = 'block';
+    canvas.style.left = `${rect.x}px`;
+    canvas.style.top = `${rect.top}px`;
+    canvas.style.width = `${rect.w}px`;
+    canvas.style.height = `${rect.h}px`;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cw = Math.round(rect.w * dpr);
+    const ch = Math.round(rect.h * dpr);
+    if (canvas.width !== cw || canvas.height !== ch) {
+      canvas.width = cw;
+      canvas.height = ch;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.w, rect.h);
+
+    // 世界座標 → 此格畫面座標
+    const toScreen = (x, y, z) => {
+      const v = new THREE.Vector3(x, y, z).project(cam);
+      return { x: (v.x + 1) / 2 * rect.w, y: (1 - v.y) / 2 * rect.h };
+    };
+
+    const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 180);
+    const placedLabels = [];
+    // AI 先畫、真人後畫，讓真人標記永遠在最上層
+    const ordered = [...this.game.racers].sort((a, b) => (a.kind === 'ai' ? 0 : 1) - (b.kind === 'ai' ? 0 : 1));
+
+    for (const r of ordered) {
+      const car = r.car;
+      if (!car) continue;
+      const isHuman = r.kind !== 'ai';
+      const p = toScreen(car.x, car.y + 1, car.z);
+      const ahead = toScreen(car.x + Math.sin(car.heading) * 8, car.y + 1, car.z + Math.cos(car.heading) * 8);
+      const ang = Math.atan2(ahead.y - p.y, ahead.x - p.x);
+      const radius = isHuman ? 13 : 8;
+
+      // 行進方向箭頭
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(ang);
+      ctx.beginPath();
+      ctx.moveTo(radius + 10, 0);
+      ctx.lineTo(radius - 1, -7);
+      ctx.lineTo(radius - 1, 7);
+      ctx.closePath();
+      ctx.fillStyle = r.color;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      ctx.restore();
+
+      // 真人外圈脈動光環
+      if (isHuman) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius + 4 + pulse * 6, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = r.color;
+        ctx.globalAlpha = 0.35 + 0.4 * (1 - pulse);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // 號碼圓點
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = r.color;
+      ctx.globalAlpha = isHuman ? 1 : 0.75;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = isHuman ? 3 : 2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `900 ${isHuman ? 15 : 10}px sans-serif`;
+      ctx.fillText(isHuman ? String(r.slot + 1) : 'AI', p.x, p.y + 1);
+
+      // 真人名字標籤
+      if (isHuman) {
+        ctx.font = 'bold 13px sans-serif';
+        const label = r.name;
+        const tw = ctx.measureText(label).width + 14;
+        // 兩位玩家靠太近時名字標籤往上堆疊，避免互相蓋住
+        let ly = p.y - radius - 18;
+        const overlaps = (y) => placedLabels.some((b) => Math.abs(b.x - p.x) < (b.w + tw) / 2 && Math.abs(b.y - y) < 22);
+        while (overlaps(ly)) ly -= 22;
+        placedLabels.push({ x: p.x, y: ly, w: tw });
+        ctx.fillStyle = 'rgba(18, 20, 26, 0.85)';
+        ctx.beginPath();
+        ctx.roundRect ? ctx.roundRect(p.x - tw / 2, ly - 10, tw, 20, 10) : ctx.rect(p.x - tw / 2, ly - 10, tw, 20);
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = r.color;
+        ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(label, p.x, ly + 1);
+      }
+    }
   }
 
   // 繪製動態小地圖

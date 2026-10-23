@@ -112,6 +112,7 @@ async function bootstrap() {
   // 7. 初始化 HUD 介面與音效系統
   const hudContainer = document.getElementById('hud-container') || container;
   const hud = new HUD(hudContainer, game);
+  hud.setOverviewCamera(overviewCamera.camera);
   const audio = new SoundSystem();
 
   game.on('sound', (event) => {
