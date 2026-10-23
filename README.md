@@ -5,8 +5,8 @@
 >
 > 📱 **手機連線體驗步驟**：
 > 1. **同一個 Wi-Fi**：確認手機和電腦連接至相同的區網或手機熱點（不可跨網段或開啟客戶端隔離）。
-> 2. **安裝套件**：在 `game` 目錄下執行 `npm install`（第二階段新增了 `ws`、`qrcode`、`selfsigned`，**務必重新安裝**）。
-> 3. **啟動伺服器**：執行 `npm start` 啟動服務。
+> 2. **安裝套件**：在專案根目錄執行 `npm install`（會自動安裝 `game` 內的套件；第二階段新增了 `ws`、`qrcode`、`selfsigned`，**務必重新安裝**）。
+> 3. **啟動伺服器**：在專案根目錄執行 `npm start` 啟動服務。
 > 4. **開啟大螢幕**：電腦用瀏覽器打開 [http://localhost:3000](http://localhost:3000)，大廳中央會顯示 4 位數房號與連線 QR Code。
 > 5. **手機掃描**：使用手機相機掃描螢幕上的 QR Code（或手動開啟終端機印出的 `https://<區網IP>:3443/controller.html`）。
 > 6. **通過憑證警告**（因使用本機自簽 HTTPS 憑證，手機首次開啟會顯示警告，請照下方操作通過）：
@@ -32,19 +32,16 @@
 - 現代網頁瀏覽器（Chrome、Edge、Safari、Firefox）
 
 ### 啟動步驟
-1. 開啟終端機，進入遊戲資料夾：
-   ```bash
-   cd game
-   ```
-2. 安裝依賴套件（僅需執行一次）：
+1. 開啟終端機，在專案根目錄安裝依賴套件（僅需執行一次，會自動安裝 `game` 內的套件）：
    ```bash
    npm install
    ```
-3. 啟動本機伺服器：
+2. 啟動本機伺服器：
    ```bash
    npm start
    ```
-4. 用瀏覽器打開 [http://localhost:3000](http://localhost:3000) 即可開始遊玩！
+   （執行自動測試：`npm test`。以上指令也可以先 `cd game` 再執行，效果相同。）
+3. 用瀏覽器打開 [http://localhost:3000](http://localhost:3000) 即可開始遊玩！
 
 ---
 
@@ -88,9 +85,8 @@
    ```bash
    git switch phase2
    ```
-3. **重新安裝依賴**（第二階段新增了 WebSocket 與 QR Code 等套件，**務必重新安裝**）：
+3. **重新安裝依賴**（第二階段新增了 WebSocket 與 QR Code 等套件，**務必重新安裝**，在專案根目錄執行即可）：
    ```bash
-   cd game
    npm install
    ```
 4. 啟動伺服器：
@@ -109,7 +105,7 @@
 2. 點擊左上角的分支選單，選擇 **`phase2`**。
 3. 點擊綠色的 **Code** 按鈕，選擇 **Download ZIP**。
 4. 將 ZIP 檔案解壓縮到**另一個全新的資料夾**。
-5. 在該資料夾內執行 `cd game && npm install && npm start` 即可遊玩。
+5. 在該資料夾內執行 `npm install && npm start` 即可遊玩。
 
 ---
 
