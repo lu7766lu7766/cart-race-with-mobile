@@ -64,6 +64,10 @@ export class Car {
     this.lapTimes = [];
     this.lapStartTime = 0;
 
+    // 逆向行駛警告
+    this.wrongWay = false;
+    this.wrongWayTimer = 0;
+
     // 碰撞與事件標記
     this.wallHitThisFrame = false;
     this.touchingWall = false;
@@ -73,6 +77,8 @@ export class Car {
     this.wheels = { fl: null, fr: null, bl: null, br: null };
     this.shieldMesh = null;
     this.colorRing = null;
+    this.flagGroup = null;
+    this.paintedMaterials = null;
     this.nameSprite = null;
     this.sparkGroup = null;
   }
@@ -324,6 +330,20 @@ export class Car {
     this.progress += d;
     this.lapsDone = Math.floor(this.progress / track.N);
     this.lap = clamp(this.lapsDone + 1, 1, CONFIG.LAPS);
+
+    // 11. 逆向行駛偵測：車頭與賽道前進方向夾角超過約 107 度且往前開，持續 WRONG_WAY_DELAY 秒才警告；
+    // 掉頭回正後以 2 倍速度解除。倒車（車頭朝前、往後退）與香蕉打轉中不算逆向
+    const tangent = track.sampleAt(this.trackIndex).tangent;
+    const facing = Math.sin(this.heading) * tangent.x + Math.cos(this.heading) * tangent.z;
+    const goingWrongWay = !this.finished && this.spinTimer <= 0 &&
+      this.speed > CONFIG.WRONG_WAY_MIN_SPEED && facing < -0.3;
+    if (goingWrongWay) {
+      this.wrongWayTimer = Math.min(CONFIG.WRONG_WAY_DELAY, this.wrongWayTimer + dt);
+      if (this.wrongWayTimer >= CONFIG.WRONG_WAY_DELAY) this.wrongWay = true;
+    } else {
+      this.wrongWayTimer = Math.max(0, this.wrongWayTimer - dt * 2);
+      if (this.wrongWayTimer === 0) this.wrongWay = false;
+    }
   }
 
   _cancelDrift() {
@@ -404,6 +424,10 @@ export class Car {
       model.position.y = 0.4;
     }
 
+    if (kartFile) {
+      this._paintKart(model, colorHex);
+    }
+
     const scale = CONFIG.KART_SCALE || 2.2;
     model.scale.set(scale, scale, scale);
     this.viewGroup.add(model);
@@ -428,6 +452,12 @@ export class Car {
     this.colorRing.rotation.x = -Math.PI / 2;
     this.colorRing.position.y = 0.04;
     this.viewGroup.add(this.colorRing);
+
+    // 2-1. 車尾天線號碼旗（玩家顏色＋發車號碼，追尾與俯視都認得出是誰）
+    this.flagGroup = this._buildFlag(colorHex);
+    if (this.flagGroup) {
+      this.viewGroup.add(this.flagGroup);
+    }
 
     // 3. 護盾半透明能量泡泡
     const shieldGeo = new THREE.SphereGeometry(2.3, 20, 20);
@@ -494,6 +524,79 @@ export class Car {
     this.viewGroup.add(this.sparkGroup);
 
     scene.add(this.viewGroup);
+  }
+
+  // 依玩家顏色重新上色（四款車共用同一張 colormap 貼圖，原本看起來都一樣灰）
+  // 車身乘上玩家顏色、角色頭部乘上淡一點的玩家顏色，輪胎保持原色
+  _paintKart(model, colorHex) {
+    const bodyColor = new THREE.Color(colorHex);
+    const headColor = bodyColor.clone().lerp(new THREE.Color(0xffffff), 0.45);
+    const materialCache = new Map();
+
+    model.traverse((node) => {
+      if (!node.isMesh) return;
+
+      let part = 'body';
+      for (let p = node; p && p !== model; p = p.parent) {
+        if (p.name.startsWith('wheel')) part = 'wheel';
+        else if (p.name === 'character') part = 'head';
+      }
+      if (part === 'wheel') return;
+
+      const tint = part === 'head' ? headColor : bodyColor;
+      const swap = (mat) => {
+        const key = `${part}_${mat.uuid}`;
+        if (!materialCache.has(key)) {
+          const painted = mat.clone();
+          painted.color = tint.clone().multiplyScalar(1.35);
+          materialCache.set(key, painted);
+        }
+        return materialCache.get(key);
+      };
+      node.material = Array.isArray(node.material) ? node.material.map(swap) : swap(node.material);
+    });
+
+    this.paintedMaterials = [...materialCache.values()];
+  }
+
+  // 建立車尾天線旗：細桿＋玩家顏色號碼旗（前後各一面，從追尾鏡頭看過去號碼不會左右顛倒）
+  _buildFlag(colorHex) {
+    if (typeof document === 'undefined') return null;
+    const group = new THREE.Group();
+
+    const poleGeo = new THREE.CylinderGeometry(0.05, 0.05, 2.8, 6);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.4 });
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.y = 1.4;
+    group.add(pole);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = colorHex;
+    ctx.fillRect(0, 0, 128, 96);
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(4, 4, 120, 88);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 66px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(this.slot + 1), 64, 52);
+
+    const flagTex = new THREE.CanvasTexture(canvas);
+    const flagGeo = new THREE.PlaneGeometry(1.2, 0.9);
+    // 旗面從旗桿往車身中央展開（旗桿立在車尾右側）
+    for (const facing of [Math.PI, 0]) {
+      const flag = new THREE.Mesh(flagGeo, new THREE.MeshBasicMaterial({ map: flagTex }));
+      flag.rotation.y = facing;
+      flag.position.set(-0.62, 2.35, facing === 0 ? 0.01 : -0.01);
+      group.add(flag);
+    }
+
+    group.position.set(0.7, 0.6, -1.3);
+    return group;
   }
 
   // 每幀同步 3D 視覺（位置、朝向、輪子滾動轉向、側傾、護盾與火花）
@@ -603,6 +706,20 @@ export class Car {
       this.shieldMesh.geometry?.dispose?.();
       this.shieldMesh.material?.dispose?.();
       this.shieldMesh = null;
+    }
+    if (this.flagGroup) {
+      this.flagGroup.traverse((node) => {
+        if (!node.isMesh) return;
+        node.geometry?.dispose?.();
+        node.material?.map?.dispose?.();
+        node.material?.dispose?.();
+      });
+      this.flagGroup = null;
+    }
+    if (this.paintedMaterials) {
+      // 只釋放複製出的材質，共用的 colormap 貼圖不 dispose
+      this.paintedMaterials.forEach((m) => m.dispose());
+      this.paintedMaterials = null;
     }
     if (this.nameSprite) {
       this.nameSprite.material?.map?.dispose?.();

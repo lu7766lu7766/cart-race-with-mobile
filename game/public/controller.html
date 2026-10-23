@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>卡丁車手機方向盤控制器</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/controller.css">
+</head>
+<body>
+
+  <!-- ======================================================== -->
+  <!-- 畫面一：加入房間畫面                                       -->
+  <!-- ======================================================== -->
+  <div id="join-screen" class="screen active">
+    <div class="join-card">
+      <div class="join-header">
+        <h1>🏎️ 卡丁車方向盤</h1>
+        <p class="subtitle">將手機橫拿，化身實體體感方向盤！</p>
+      </div>
+
+      <!-- 不安全連線警告（非 HTTPS 提示） -->
+      <div id="secure-warning" class="warning-box hidden">
+        ⚠️ 偵測到目前網址非 HTTPS 安全連線。手機陀螺儀感測器可能受到瀏覽器限制而無法轉向，建議改用 <strong>https://</strong> 網址開啟！
+      </div>
+
+      <div class="input-group">
+        <label for="room-code">4 位數房間號碼</label>
+        <input type="number" id="room-code" placeholder="請看大螢幕輸入（如 1234）" pattern="[0-9]*" inputmode="numeric" maxlength="4">
+      </div>
+
+      <div class="input-group">
+        <label for="player-name">玩家暱稱（最多 8 字）</label>
+        <input type="text" id="player-name" placeholder="預設為「玩家N」" maxlength="8">
+      </div>
+
+      <div id="error-message" class="error-text hidden"></div>
+
+      <button id="btn-start" class="btn-primary">開始連線 🏁</button>
+
+      <div class="join-tips">
+        <p>💡 提示：點擊「開始」時將自動向手機請求動作感測權限、嘗試全螢幕並鎖定橫向模式。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- 畫面二：方向盤體感控制畫面（橫向）                           -->
+  <!-- ======================================================== -->
+  <div id="wheel-screen" class="screen">
+    <!-- 上方狀態列（依玩家車輛顏色變色） -->
+    <header id="top-bar">
+      <div class="info-badge" id="rank-badge">
+        <span class="badge-label">名次</span>
+        <span class="badge-value" id="rank-text">--</span>
+      </div>
+
+      <div class="wheel-indicator-container">
+        <!-- 會跟隨旋轉的方向盤圖示 -->
+        <div id="wheel-icon" class="wheel-icon">
+          <svg viewBox="0 0 100 100" width="46" height="46">
+            <circle cx="50" cy="50" r="44" stroke="#ffffff" stroke-width="8" fill="rgba(0,0,0,0.4)" />
+            <circle cx="50" cy="50" r="14" fill="#ffffff" />
+            <line x1="50" y1="6" x2="50" y2="36" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+            <line x1="6" y1="50" x2="36" y2="50" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+            <line x1="64" y1="50" x2="94" y2="50" stroke="#ffffff" stroke-width="6" stroke-linecap="round" />
+            <circle cx="50" cy="20" r="4" fill="#ff4757" />
+          </svg>
+        </div>
+        <div id="steer-degree">0°</div>
+      </div>
+
+      <div class="info-badge" id="lap-badge">
+        <span class="badge-label">圈數</span>
+        <span class="badge-value" id="lap-text">-- / --</span>
+      </div>
+
+      <!-- 控制輔助按鈕 -->
+      <div class="header-actions">
+        <button id="btn-calibrate" class="btn-action">校正 🎯</button>
+        <button id="btn-invert" class="btn-action">反轉 🔄</button>
+      </div>
+    </header>
+
+    <!-- 主控面板（左倒退、右油門、中道具） -->
+    <main id="control-area">
+      <!-- 左半部：倒退 / 煞車 -->
+      <div id="btn-brake" class="touch-zone zone-left">
+        <div class="zone-content">
+          <span class="zone-icon">🛑</span>
+          <span class="zone-title">倒退 / 煞車</span>
+        </div>
+      </div>
+
+      <!-- 正中央：圓形魔石道具按鈕 -->
+      <div class="zone-center">
+        <button id="btn-item" class="item-circle">
+          <div id="item-icon" class="item-icon">❓</div>
+          <div id="item-stars" class="item-stars"></div>
+        </button>
+        <div class="drift-tip-banner">
+          【甩尾技巧】：同時按住「油門」與「倒退」即可甩尾迷你加速！
+        </div>
+      </div>
+
+      <!-- 右半部：油門加速 -->
+      <div id="btn-throttle" class="touch-zone zone-right">
+        <div class="zone-content">
+          <span class="zone-icon">⚡</span>
+          <span class="zone-title">油門加速</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- 比賽進行中，等待下一場遮罩 -->
+    <div id="waiting-overlay" class="overlay-notice hidden">
+      <div class="notice-card">
+        <h2>🏁 比賽進行中</h2>
+        <p>你已成功加入房間！下一場開賽時將自動上場競速，請稍候…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 受擊紅框閃爍回饋疊層（支援無震動之手機） -->
+  <div id="flash-overlay" class="flash-overlay"></div>
+
+  <!-- 請將手機轉橫提醒（直式畫面時自動觸發） -->
+  <div id="rotate-prompt" class="rotate-prompt">
+    <div class="rotate-content">
+      <div class="phone-rotate-icon">📱 ↷ 🔄</div>
+      <h2>請把手機轉成橫向</h2>
+      <p>雙手握持兩側當作方向盤，享受最極致的體感賽車體驗！</p>
+    </div>
+  </div>
+
+  <script type="module" src="js/controller.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "cart-race-with-mobile",
+  "private": true,
+  "description": "根目錄捷徑：轉呼叫 game/ 內的 npm 指令",
+  "scripts": {
+    "postinstall": "npm install --prefix game",
+    "start": "npm start --prefix game",
+    "test": "npm test --prefix game"
+  }
+}
