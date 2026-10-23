@@ -462,3 +462,39 @@ test('鍵盤道具鍵防重複觸發：repeat:true 不觸發 useItem，repeat:fa
 
   input.destroy();
 });
+
+test('逆向行駛通知：進入逆向時發出 wrongWay 一次，持續逆向每 WRONG_WAY_REPEAT 秒再發，回正後停止', () => {
+  const game = new Game({ headless: true, rng: mulberry32(3) });
+  const p = game.addPlayer({ name: '測試', kind: 'keyboard', input: { getState: () => ({ steer: 0, throttle: 0, brake: 0 }) } });
+  game.startRace();
+  const dt = 1 / 60;
+  while (game.state !== 'racing') game.step(dt);
+
+  const racer = game.racers.find((r) => r.id === p.id);
+  const alerts = [];
+  game.on('wrongWay', ({ player }) => {
+    if (player.id === p.id) alerts.push(game.raceTime);
+  });
+
+  // 直接標記為逆向（判定邏輯本身在 car.test.js 測試），模擬 4.5 秒
+  const setWrongWay = (value) => {
+    racer.car.wrongWay = value;
+    racer.car.wrongWayTimer = value ? CONFIG.WRONG_WAY_DELAY : 0;
+    racer.car.speed = value ? CONFIG.WRONG_WAY_MIN_SPEED + 5 : 0;
+  };
+  const originalUpdate = racer.car.update.bind(racer.car);
+  let forced = true;
+  racer.car.update = (...args) => {
+    originalUpdate(...args);
+    setWrongWay(forced);
+  };
+
+  for (let i = 0; i < Math.round(4.5 / dt); i++) game.step(dt);
+  const expected = Math.floor(4.5 / CONFIG.WRONG_WAY_REPEAT) + 1;
+  assert.equal(alerts.length, expected, `持續逆向 4.5 秒應通知 ${expected} 次`);
+
+  forced = false;
+  const before = alerts.length;
+  for (let i = 0; i < 180; i++) game.step(dt);
+  assert.equal(alerts.length, before, '回正後不應再通知');
+});

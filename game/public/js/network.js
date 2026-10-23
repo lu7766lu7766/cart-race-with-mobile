@@ -306,6 +306,24 @@ export function initNetwork(game) {
     }
   });
 
+  // (5) 逆向行駛：傳送長震動提醒（500ms，持續逆向時每 2 秒重複）
+  game.on('wrongWay', ({ player }) => {
+    if (!player) return;
+    for (const [serverPlayerId, entry] of playerMap.entries()) {
+      if (entry.gamePlayer.id === player.id) {
+        send({
+          type: 'toPlayer',
+          playerId: serverPlayerId,
+          data: {
+            type: 'vibrate',
+            ms: 500,
+          },
+        });
+        break;
+      }
+    }
+  });
+
   // 啟動連線
   connect();
 }

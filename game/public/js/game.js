@@ -284,6 +284,21 @@ export class Game extends Emitter {
       }
     }
 
+    // 逆向行駛：剛進入逆向時通知一次，持續逆向每 WRONG_WAY_REPEAT 秒再通知（網路層轉成手機震動）
+    for (const racer of this.racers) {
+      const car = racer.car;
+      if (!car) continue;
+      if (car.wrongWay) {
+        racer.wrongWayAlertTimer = (racer.wrongWayAlertTimer ?? 0) - dt;
+        if (racer.wrongWayAlertTimer <= 0) {
+          racer.wrongWayAlertTimer = CONFIG.WRONG_WAY_REPEAT;
+          this.emit('wrongWay', { player: racer });
+        }
+      } else {
+        racer.wrongWayAlertTimer = 0;
+      }
+    }
+
     // 道具系統邏輯更新（道具箱、香蕉皮、導彈）
     this.itemSystem.update(dt, this.racers);
 

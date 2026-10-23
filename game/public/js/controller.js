@@ -565,7 +565,7 @@ btnStart.addEventListener('click', async () => {
       return;
     }
 
-    // 收到震動通知（被道具打中 300ms 或迷你加速釋放 60ms）
+    // 收到震動通知（被道具打中 300ms、迷你加速釋放 60ms 或逆向行駛 500ms）
     if (msg.type === 'vibrate') {
       triggerFeedback(msg.ms || 300);
       return;
