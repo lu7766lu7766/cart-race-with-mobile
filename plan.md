@@ -207,7 +207,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 - 套件：`ws`（WebSocket）、`selfsigned`（產生自簽憑證）、`qrcode`（產生 QR Code SVG）。
 - 同時開 HTTP `:3000`（大螢幕用 localhost）與 HTTPS `:3443`（手機用），兩者共用同一套 WebSocket 處理（路徑 `/ws`）。
 - 憑證第一次啟動時產生，存在 `cert/`，之後重複使用（手機只需要信任一次）。
-- `GET /api/server-info` → `{ controllerUrl: "https://<區網IP>:3443/controller.html", qrSvg }`
+- `GET /api/server-info?code=1234` → `{ controllerUrl: "https://<區網IP>:3443/controller.html?code=1234", qrSvg }`（code 是 4 位數字時才附上，手機掃碼會自動填好房號）
 - 啟動時在終端機印出區網 IP 與手機網址。
 - 每 15 秒對每個連線送 ping，沒有回 pong 的連線就關閉（處理手機休眠的半開連線）。
 
@@ -252,7 +252,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 
 1. 安裝並使用套件：ws（WebSocket）、selfsigned（自簽憑證）、qrcode（產生 QR Code），更新 package.json。安裝後執行 npm audit，確認沒有 high 等級的安全漏洞。注意：selfsigned 5 版以後的 generate() 是 async，要用 await 取得結果；簽章演算法要指定 algorithm:'sha256'（預設的 sha1 會被 iPhone 拒絕），有效期設 2 年（notAfterDate），不要超過 825 天。
 2. 保留原本 HTTP 3000 埠；另外開 HTTPS 3443 埠，用 selfsigned 產生憑證並存到 cert/ 資料夾，下次啟動直接讀取。兩個埠提供相同的網頁，也都在路徑 /ws 接受 WebSocket 連線（共用同一套處理程式）。
-3. 新增 GET /api/server-info，回傳 JSON：{ controllerUrl: "https://<本機區網IPv4>:3443/controller.html", qrSvg: <controllerUrl 的 QR Code SVG 字串> }。區網 IP 用 os.networkInterfaces() 找，排除 127.0.0.1 和虛擬網卡。
+3. 新增 GET /api/server-info，回傳 JSON：{ controllerUrl: "https://<本機區網IPv4>:3443/controller.html", qrSvg: <controllerUrl 的 QR Code SVG 字串> }。網址帶 ?code=1234（4 位數字）時，把 ?code=1234 附在 controllerUrl 後面再產生 QR Code，讓手機掃碼後自動填好房號；不是 4 位數字就忽略。區網 IP 用 os.networkInterfaces() 找，排除 127.0.0.1 和虛擬網卡。
 4. 房間功能，訊息一律是 JSON：
    - 大螢幕送 {type:'host'} → 建立 4 位數字不重複的房號，回 {type:'roomCreated', code}
    - 手機送 {type:'join', code, name} → 成功回 {type:'joined', playerId}，並通知大螢幕 {type:'playerJoined', playerId, name}；房號不存在或已有 4 位手機玩家就回 {type:'error', message:'中文錯誤訊息'}
@@ -276,7 +276,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 現在請實作 public/js/network.js 裡的 initNetwork(game)：
 
 1. 依照目前網頁的通訊協定連線 WebSocket（http 用 ws://、https 用 wss://，路徑 /ws），連上後送 {type:'host'}。
-2. 收到 {type:'roomCreated', code} 後，fetch /api/server-info，呼叫 game.setRoomInfo({ code, url: controllerUrl, qrSvg })，讓大廳顯示房號、手機網址與 QR Code。
+2. 收到 {type:'roomCreated', code} 後，fetch `/api/server-info?code=${code}`，呼叫 game.setRoomInfo({ code, url: controllerUrl, qrSvg })，讓大廳顯示房號、手機網址與 QR Code。
 3. 建立 RemoteInput 類別（和 KeyboardInput 一樣提供 getState()）：
    - 收到 {type:'input', playerId, steer, throttle, brake, item} 時更新對應玩家的輸入
    - 若 throttle > 0.5 且 brake > 0.5，視為按住甩尾（drift = true）
@@ -304,7 +304,7 @@ game.on('playerFinished', ({ player, rank, time }) => …)
 接續上一步。請新增手機控制器頁面 public/controller.html（含 CSS）與 public/js/controller.js，手機要從 https://<電腦IP>:3443/controller.html 開啟。WebSocket 協定和 server.js 一致：送 {type:'join', code, name}、收 joined/error/roomClosed；之後每秒 30 次送 {type:'input', steer, throttle, brake, item}；收到 {type:'status', ...} 與 {type:'vibrate', ms} 時更新畫面。
 
 畫面一「加入房間」：
-- 房號輸入框（4 位數字，使用數字鍵盤）、暱稱輸入框（最多 8 字，記在 localStorage）、「開始」大按鈕。
+- 房號輸入框（4 位數字，使用數字鍵盤；網址有 ?code= 時自動填入）、暱稱輸入框（最多 8 字，記在 localStorage，下次打開自動帶入；讀寫 localStorage 要用 try/catch，無痕模式可能會丟錯）、「開始」大按鈕。
 - 按下「開始」時（一定要在點擊事件裡第一步執行）：先呼叫 DeviceMotionEvent.requestPermission() 與 DeviceOrientationEvent.requestPermission() 取得感測器權限（iOS；呼叫前先檢查 typeof DeviceMotionEvent.requestPermission === 'function'，Android 和電腦沒有這個函式）。「開始」按鈕在這一步之前就先停用，避免連點重複加入；之後嘗試進入全螢幕、鎖定橫向、使用 Wake Lock 讓螢幕不會變暗（各自包 try/catch，失敗不影響加入）。
 - 如果 window.isSecureContext 是 false，顯示中文提示：必須用 https 網址開啟。
 - 加入後任何時候收到 error，都要停止發送 input、關閉 WebSocket、回到畫面一並顯示錯誤訊息。

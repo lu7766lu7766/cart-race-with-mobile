@@ -150,7 +150,12 @@ export function createRequestHandler({ getControllerUrl = null } = {}) {
 
     // GET /api/server-info：回傳手機連線網址與 QR Code SVG
     if (urlPath === '/api/server-info') {
-      const controllerUrl = typeof getControllerUrl === 'function' ? getControllerUrl() : `https://${getLocalIp()}:${HTTPS_PORT}/controller.html`;
+      let controllerUrl = typeof getControllerUrl === 'function' ? getControllerUrl() : `https://${getLocalIp()}:${HTTPS_PORT}/controller.html`;
+      // 帶 ?code=1234 時把房號附在網址上，手機掃碼後會自動填好房號
+      const code = new URL(req.url, 'http://localhost').searchParams.get('code');
+      if (code && /^\d{4}$/.test(code)) {
+        controllerUrl += `?code=${code}`;
+      }
       try {
         if (cachedControllerUrl !== controllerUrl || !cachedQrSvg) {
           cachedControllerUrl = controllerUrl;

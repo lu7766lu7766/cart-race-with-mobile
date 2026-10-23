@@ -436,3 +436,21 @@ test('12. 通訊埠被占用（EADDRINUSE）時，startServer 應 reject 而非�
     await new Promise((resolve) => dummyServer.close(resolve));
   }
 });
+
+test('13. /api/server-info 帶 4 位數房號時，控制器網址與 QR Code 會附上 ?code=；不合法的房號則忽略', async () => {
+  const server = await startServer({ httpPort: 0, httpsPort: null });
+  await server.ready;
+
+  try {
+    const base = `http://127.0.0.1:${server.httpPort}/api/server-info`;
+
+    const withCode = await fetch(`${base}?code=1234`).then((r) => r.json());
+    assert.ok(withCode.controllerUrl.endsWith('/controller.html?code=1234'));
+    assert.ok(withCode.qrSvg.startsWith('<svg'));
+
+    const badCode = await fetch(`${base}?code=12ab`).then((r) => r.json());
+    assert.ok(badCode.controllerUrl.endsWith('/controller.html'));
+  } finally {
+    await server.close();
+  }
+});

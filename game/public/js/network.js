@@ -126,7 +126,7 @@ export function initNetwork(game) {
       // (A) 房間建立成功：取得房號與 QR Code，更新大廳 HUD
       if (msg.type === 'roomCreated') {
         const { code } = msg;
-        fetch('/api/server-info')
+        fetch(`/api/server-info?code=${encodeURIComponent(code)}`)
           .then((res) => res.json())
           .then((info) => {
             game.setRoomInfo({

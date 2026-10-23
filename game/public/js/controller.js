@@ -73,11 +73,13 @@ function init() {
     roomCodeInput.value = codeParam.trim();
   }
 
-  // 從 localStorage 還原上次輸入的暱稱
-  const savedName = localStorage.getItem('kart_nickname');
-  if (savedName) {
-    playerNameInput.value = savedName;
-  }
+  // 從 localStorage 還原上次輸入的暱稱（無痕模式等情況可能無法存取，忽略即可）
+  try {
+    const savedName = localStorage.getItem('kart_nickname');
+    if (savedName) {
+      playerNameInput.value = savedName;
+    }
+  } catch (e) {}
 }
 
 // 顯示錯誤訊息
@@ -400,7 +402,9 @@ btnStart.addEventListener('click', async () => {
 
   showError('');
   if (name) {
-    localStorage.setItem('kart_nickname', name);
+    try {
+      localStorage.setItem('kart_nickname', name);
+    } catch (e) {}
   }
 
   // (1) 取得感測器權限（iOS 13+ 必須在使用者點擊事件中第一時間執行）
