@@ -6,6 +6,16 @@
   <title>卡丁車手機方向盤控制器</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="css/controller.css">
+
+  <!-- 造型 3D 預覽使用 Three.js（與大螢幕相同的 Import Map） -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "/lib/three/build/three.module.js",
+      "three/addons/": "/lib/three/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
 
@@ -77,6 +87,7 @@
 
       <!-- 控制輔助按鈕 -->
       <div class="header-actions">
+        <button id="btn-look" class="btn-action hidden">造型 🎨</button>
         <button id="btn-calibrate" class="btn-action">校正 🎯</button>
         <button id="btn-invert" class="btn-action">反轉 🔄</button>
       </div>
@@ -111,6 +122,36 @@
         </div>
       </div>
     </main>
+
+    <!-- 大廳造型選擇面板（只在大廳顯示，開賽後自動收起） -->
+    <div id="look-panel" class="look-panel hidden">
+      <div class="look-card">
+        <div class="look-header">
+          <div>
+            <h2>🎨 選擇你的造型</h2>
+            <p class="look-map">地圖：<span id="look-map-name">--</span></p>
+          </div>
+          <button id="btn-look-close" class="btn-action">收起 ✕</button>
+        </div>
+        <div class="look-body">
+          <!-- 3D 旋轉預覽 -->
+          <div class="look-preview">
+            <canvas id="look-canvas"></canvas>
+            <div id="look-preview-name" class="look-preview-name"></div>
+            <div class="look-preview-fallback">此手機不支援 3D 預覽</div>
+          </div>
+          <div class="look-options">
+            <div class="look-section-title">角色車款（決定能力，車手會跟著換）</div>
+            <div id="look-karts" class="look-karts"></div>
+            <div class="look-section-title">車手</div>
+            <div id="look-drivers" class="look-drivers"></div>
+            <div class="look-section-title">烤漆顏色（車身與車手衣服；灰色代表已被選走）</div>
+            <div id="look-paints" class="look-paints"></div>
+          </div>
+        </div>
+        <p class="look-wait">選好後等大螢幕按 Enter 開賽 🏁</p>
+      </div>
+    </div>
 
     <!-- 比賽進行中，等待下一場遮罩 -->
     <div id="waiting-overlay" class="overlay-notice hidden">

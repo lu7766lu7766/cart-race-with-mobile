@@ -1,12 +1,14 @@
 // ============================================================
-//  hud.js — 遊戲介面管理（大廳角色說明、倒數、分割畫面 HUD 面板、小地圖與結算）
+//  hud.js — 遊戲介面管理（大廳地圖選擇、造型選擇、倒數、分割畫面 HUD 面板、小地圖與結算）
 //  支援分割畫面多鏡頭：依據 viewRacers 快照與 getViewportRects，
 //  為每位真人賽車在對應螢幕格子疊加專屬 DOM 面板（名次、圈數、道具星星、速度表與甩尾火花條）。
 //  已移除舊版 CSS2DRenderer，車頂姓名改由 3D 空間之 Sprite 渲染。
 // ============================================================
 
 import * as THREE from 'three';
-import { CONFIG, KARTS, ITEMS } from './config.js';
+import { CONFIG, KARTS, ITEMS, PAINTS, DRIVERS, DIFFICULTIES } from './config.js';
+import { MAPS } from './maps.js';
+import { Track } from './track.js';
 import { formatTime, clamp, getViewportRects, escapeHtml } from './utils.js';
 
 export class HUD {
@@ -16,6 +18,11 @@ export class HUD {
     this._lastQr = null;
     this._lastSlotsHtml = null;
     this._lastResultsHtml = null;
+
+    // 由 main.js 設定的回呼：點選地圖卡片、點選造型按鈕
+    this.onMapSelect = null;
+    this.onDifficultySelect = null;
+    this.onLookAction = null;
 
     // 建立 DOM 介面元素結構
     this._createDOM();
@@ -49,15 +56,53 @@ export class HUD {
           <div class="room-url" id="roomUrl" style="display:none;"></div>
           <div class="room-message" id="roomMsg"></div>
         </div>
+        <div class="lobby-section-title">🗺️ 選擇地圖 <span class="lobby-section-hint">按 1 / 2 / 3 或 Tab，也可以用滑鼠點</span></div>
+        <div class="map-select" id="mapSelect"></div>
+        <div class="lobby-section-title">🎚️ 難度 <span class="lobby-section-hint">按 Q 切換，也可以用滑鼠點</span></div>
+        <div class="difficulty-select" id="difficultySelect">
+          ${DIFFICULTIES.map((d) => `
+            <button class="difficulty-chip" data-difficulty="${d.id}" tabindex="-1">
+              <span class="difficulty-name">${d.emoji} ${d.name}</span>
+              <span class="difficulty-desc">${d.desc}</span>
+            </button>
+          `).join('')}
+        </div>
+        <div class="lobby-section-title">🏎️ 參賽車手與造型</div>
         <div class="slots-container" id="playerSlots"></div>
         <div class="lobby-controls-help">
-          <p>⌨️ 玩家 1：按 <strong>↑</strong> 加入（方向鍵駕駛，右Shift 甩尾，Enter 道具/開始）</p>
-          <p>⌨️ 玩家 2：按 <strong>W</strong> 加入（WASD 駕駛，左Shift 甩尾，空白鍵 道具）</p>
+          <p>⌨️ 玩家 1：按 <strong>↑</strong> 加入（再按 ↑ 換車手），<strong>← →</strong> 換角色、<strong>右Shift</strong> 換顏色</p>
+          <p>⌨️ 玩家 2：按 <strong>W</strong> 加入（再按 W 換車手），<strong>A D</strong> 換角色、<strong>左Shift</strong> 換顏色</p>
+          <p>📱 手機玩家：加入後直接在手機上選角色、車手與顏色（有 3D 預覽）</p>
+          <p class="audio-state" id="audioState">🔊 M 靜音　🎵 B 背景音樂</p>
           <p class="start-hint">按 <strong>Enter</strong> 開始比賽！</p>
         </div>
       </div>
     `;
     this.root.appendChild(this.lobbyEl);
+
+    // 地圖卡片只建立一次（裡面有縮圖畫布），之後每幀只切換 active 樣式
+    this._buildMapCards();
+
+    // 大廳滑鼠點選（事件委派：卡片每次重繪都不必重新綁定）
+    this.lobbyEl.addEventListener('click', (e) => {
+      const diffBtn = e.target.closest('[data-difficulty]');
+      if (diffBtn) {
+        diffBtn.blur();
+        this.onDifficultySelect?.(diffBtn.dataset.difficulty);
+        return;
+      }
+      const mapBtn = e.target.closest('[data-map]');
+      if (mapBtn) {
+        mapBtn.blur();
+        this.onMapSelect?.(mapBtn.dataset.map);
+        return;
+      }
+      const lookBtn = e.target.closest('[data-action]');
+      if (lookBtn) {
+        lookBtn.blur();
+        this.onLookAction?.(lookBtn.dataset.player, lookBtn.dataset.action);
+      }
+    });
 
     // 2. 倒數層（Countdown Overlay）
     this.countdownEl = document.createElement('div');
@@ -200,6 +245,120 @@ export class HUD {
     };
   }
 
+  // 建立地圖卡片：俯視縮圖（路面依高度上色、標出特殊路段與跳台）＋ 數據 ＋ 特色標籤
+  _buildMapCards() {
+    const mapEl = this.root.querySelector('#mapSelect');
+    if (!mapEl) return;
+    this._mapCards = [];
+    MAPS.forEach((m, i) => {
+      const track = new Track(m.id);
+      let minH = Infinity, maxH = -Infinity;
+      for (const h of track.height) { minH = Math.min(minH, h); maxH = Math.max(maxH, h); }
+
+      const card = document.createElement('button');
+      card.className = 'map-card';
+      card.dataset.map = m.id;
+      card.tabIndex = -1;
+      card.innerHTML = `
+        <canvas class="map-thumb" width="200" height="104"></canvas>
+        <span class="map-name">${m.emoji} ${i + 1}. ${escapeHtml(m.name)}</span>
+        <span class="map-stars" title="賽道難度">${'★'.repeat(m.stars || 1)}${'☆'.repeat(3 - (m.stars || 1))} ${['', '入門', '中級', '高手'][m.stars || 1]}</span>
+        <span class="map-stats">全長 ${Math.round(track.length)}・落差 ${Math.round(maxH - minH)}m・路寬 ${track.width}</span>
+        <span class="map-features">${(m.features || []).map((f) => `<i>${escapeHtml(f)}</i>`).join('')}</span>
+        <span class="map-desc">${escapeHtml(m.description)}</span>
+      `;
+      this._drawMapThumb(card.querySelector('canvas'), track, minH, maxH);
+      mapEl.appendChild(card);
+      this._mapCards.push(card);
+    });
+  }
+
+  _drawMapThumb(canvas, track, minH, maxH) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const W = canvas.width;
+    const H = canvas.height;
+    const theme = track.theme;
+    const hex = (n) => '#' + new THREE.Color(n).getHexString();
+
+    // 背景：地形顏色漸層（低處 → 高處）
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, hex(theme.terrain?.colorLow ?? theme.ground));
+    bg.addColorStop(1, hex(theme.terrain?.colorHigh ?? theme.ground));
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of track.points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    const pad = 10;
+    const scale = Math.min((W - pad * 2) / (maxX - minX), (H - pad * 2) / (maxZ - minZ));
+    const ox = W / 2 - ((minX + maxX) / 2) * scale;
+    const oz = H / 2 - ((minZ + maxZ) / 2) * scale;
+    const px = (i) => track.points[i].x * scale + ox;
+    const pz = (i) => track.points[i].z * scale + oz;
+    const roadW = Math.max(3, track.width * scale * 1.6);
+    const N = track.N;
+
+    const strokeRange = (from, to, color, width) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(px(from % N), pz(from % N));
+      for (let k = from + 1; k <= to; k++) ctx.lineTo(px(k % N), pz(k % N));
+      ctx.stroke();
+    };
+
+    // 峽谷：路的兩側畫深色岩壁
+    for (const z of track.zones) {
+      if (z.type === 'canyon') strokeRange(z.start, z.end + (z.end < z.start ? N : 0), '#6e2c14', roadW + 7);
+    }
+    // 外框（深色描邊）
+    strokeRange(0, N, 'rgba(0,0,0,0.55)', roadW + 2);
+    // 路面依高度上色：低處淺灰 → 高處橘紅
+    const low = new THREE.Color(0xdfe6e9);
+    const high = new THREE.Color(0xff6b35);
+    const c = new THREE.Color();
+    for (let i = 0; i < N; i += 3) {
+      const k = maxH > minH ? (track.height[i] - minH) / (maxH - minH) : 0;
+      c.copy(low).lerp(high, k);
+      strokeRange(i, i + 3, '#' + c.getHexString(), roadW);
+    }
+    // 特殊路段
+    const zoneColor = { sand: '#f6b93b', ice: '#74b9ff', tunnel: '#2d3436' };
+    for (const z of track.zones) {
+      if (zoneColor[z.type]) strokeRange(z.start, z.end + (z.end < z.start ? N : 0), zoneColor[z.type], roadW * (z.type === 'tunnel' ? 1.5 : 1));
+    }
+    // 跳台（紅點）
+    for (const j of track.jumps) {
+      ctx.fillStyle = '#ff3838';
+      ctx.beginPath();
+      ctx.arc(px(j.index), pz(j.index), 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 起點（黑白方塊）
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(px(0) - 4, pz(0) - 4, 8, 8);
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(px(0) - 4, pz(0) - 4, 4, 4);
+    ctx.fillRect(px(0), pz(0), 4, 4);
+  }
+
+  // 換地圖後重新計算小地圖比例
+  onMapChanged() {
+    this._drawMinimapStatic();
+  }
+
+  // 顯示目前的靜音與背景音樂狀態
+  setAudioState({ muted, music }) {
+    const el = this.root.querySelector('#audioState');
+    if (!el) return;
+    el.textContent = `${muted ? '🔇 已靜音（按 M 開啟）' : '🔊 按 M 靜音'}　${music ? '🎵 按 B 關閉背景音樂' : '🎵 背景音樂已關閉（按 B 開啟）'}`;
+  }
+
   // 由 main.js 傳入全場俯視相機，供標記層把 3D 座標投影到畫面
   setOverviewCamera(camera) {
     this.overviewCamera = camera;
@@ -293,39 +452,66 @@ export class HUD {
     const slotsEl = this.root.querySelector('#playerSlots');
     if (!slotsEl) return;
 
-    const humans = this.game.getPlayers();
-    const humanSlotMap = new Map(humans.map((h) => [h.slot, h]));
+    // 難度：標示目前選擇
+    for (const chip of this.root.querySelectorAll('[data-difficulty]')) {
+      chip.classList.toggle('active', chip.dataset.difficulty === this.game.difficulty);
+    }
 
+    // 地圖選擇卡片：標示目前選擇的地圖
+    if (this._mapCards) {
+      for (const card of this._mapCards) {
+        card.classList.toggle('active', card.dataset.map === this.game.mapId);
+      }
+    }
+
+    // 參賽名單（真人顯示自己選的造型；空位顯示電腦補位會使用的造型）
     let html = '';
-    for (let slot = 0; slot < CONFIG.MAX_PLAYERS; slot++) {
-      const human = humanSlotMap.get(slot);
-      const kart = KARTS[slot] || KARTS[0];
+    for (const entry of this.game.getLobbyRoster()) {
+      const human = entry.human;
+      const kart = KARTS[entry.kart] || KARTS[0];
+      const paint = PAINTS[entry.paint] || PAINTS[0];
+      const tagTextColor = (paint.hex === '#f5f6fa' || paint.hex === '#f1c40f') ? '#222' : '#fff';
+      const driver = DRIVERS[entry.driver] || DRIVERS[0];
+      const driverLine = `<div class="slot-driver">${driver.emoji} 車手：${driver.name}（${driver.title}）</div>`;
 
       if (human) {
         const icon = human.kind === 'remote' ? '📱' : '⌨️';
+        const keyHint = human.kind === 'remote' ? '在手機上換造型' : '';
         html += `
-          <div class="player-slot joined" style="border-left: 6px solid ${kart.color}">
+          <div class="player-slot joined" style="border-left: 6px solid ${paint.hex}">
             <div class="slot-main">
               <span class="slot-icon">${icon}</span>
               <span class="slot-name">${escapeHtml(human.name)}</span>
-              <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+              <span class="slot-color-tag" style="background:${paint.hex};color:${tagTextColor}">${paint.name}</span>
             </div>
             <div class="slot-ability">
-              <span class="char-title">${kart.character}</span>：${kart.ability}
+              <span class="char-title">${kart.emoji} ${kart.character}</span>：${kart.ability}
+            </div>
+            ${driverLine}
+            <div class="slot-look-actions">
+              <button data-player="${human.id}" data-action="kartPrev" tabindex="-1">◀</button>
+              <span class="look-label">角色</span>
+              <button data-player="${human.id}" data-action="kartNext" tabindex="-1">▶</button>
+              <button data-player="${human.id}" data-action="driverPrev" tabindex="-1">◀</button>
+              <span class="look-label">車手</span>
+              <button data-player="${human.id}" data-action="driverNext" tabindex="-1">▶</button>
+              <button data-player="${human.id}" data-action="paintNext" tabindex="-1">🎨</button>
+              <span class="look-hint">${keyHint}</span>
             </div>
           </div>
         `;
       } else {
         html += `
-          <div class="player-slot ai-fallback" style="border-left: 6px solid ${kart.color}">
+          <div class="player-slot ai-fallback" style="border-left: 6px solid ${paint.hex}">
             <div class="slot-main">
               <span class="slot-icon">🤖</span>
               <span class="slot-name">電腦補位</span>
-              <span class="slot-color-tag" style="background:${kart.color}">${kart.colorName}</span>
+              <span class="slot-color-tag" style="background:${paint.hex};color:${tagTextColor}">${paint.name}</span>
             </div>
             <div class="slot-ability">
-              <span class="char-title">${kart.character}</span>：${kart.ability}
+              <span class="char-title">${kart.emoji} ${kart.character}</span>：${kart.ability}
             </div>
+            ${driverLine}
           </div>
         `;
       }

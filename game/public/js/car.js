@@ -6,18 +6,23 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { CONFIG, KARTS } from './config.js';
+import { CONFIG, KARTS, DRIVERS } from './config.js';
+import { buildKartLook } from './kartLook.js';
 import { clamp, damp } from './utils.js';
 
 export class Car {
-  constructor({ slot = 0, track, player = null, onEvent = null }) {
+  // slot：發車格位與玩家號碼；kart：角色車款（KARTS 索引，決定模型與被動能力，預設等於 slot）
+  // driver：車手造型（DRIVERS 索引，只影響外觀，預設為角色的預設車手）
+  constructor({ slot = 0, kart = null, driver = null, track, player = null, onEvent = null }) {
     this.slot = slot;
+    this.kart = Number.isInteger(kart) && KARTS[kart] ? kart : (KARTS[slot] ? slot : 0);
+    this.driver = Number.isInteger(driver) && DRIVERS[driver] ? driver : (KARTS[this.kart].driver ?? 0);
     this.player = player;
     this.track = track;
     this.onEvent = onEvent || (() => {});
 
     // 依據角色設定被動能力乘數（stats）
-    const kartConfig = KARTS[slot] || KARTS[0];
+    const kartConfig = KARTS[this.kart] || KARTS[0];
     this.stats = { ...kartConfig.stats };
 
     // 起始位置與朝向依據發車格位
@@ -68,6 +73,12 @@ export class Car {
     this.wrongWay = false;
     this.wrongWayTimer = 0;
 
+    // 音效用：本步實際生效的油門、煞車與是否在草地上（引擎聲、煞車聲、草地噪音）
+    this.throttleInput = 0;
+    this.brakeInput = 0;
+    this.isOffroad = false;
+    this.surface = null;          // 目前路面種類：'sand' / 'ice' / null
+
     // 碰撞與事件標記
     this.wallHitThisFrame = false;
     this.touchingWall = false;
@@ -104,6 +115,8 @@ export class Car {
     let throttle = 0;
     let brake = 0;
     let wantDrift = false;
+    this.throttleInput = 0;
+    this.brakeInput = 0;
 
     if (this.hitTimer > 0) {
       // 導彈擊中：停頓不能動
@@ -124,6 +137,13 @@ export class Car {
       throttle = clamp(inputState?.throttle ?? 0, 0, 1);
       brake = clamp(inputState?.brake ?? 0, 0, 1);
       wantDrift = Boolean(inputState?.drift) || (throttle > 0.5 && brake > 0.5);
+
+      // 特殊路面（只有在路面上、輪胎著地時才有效）：
+      //   ice 結冰：轉向抓地力 ×0.5、加速 ×0.7、煞車 ×0.4，甩尾集氣 ×1.25
+      //   sand 流沙：最高速 ×0.72（加速中 ×0.88）、加速 ×0.75
+      const onRoad = Math.abs(this.lateral) <= track.width / 2;
+      this.surface = (this.grounded && onRoad && track.surfaceAt) ? track.surfaceAt(this.trackIndex) : null;
+      const grip = this.surface === 'ice' ? 0.5 : 1;
 
       // 空中轉向靈敏度降低，且油門無效
       if (!this.grounded) {
@@ -163,7 +183,7 @@ export class Car {
           this._cancelDrift();
         } else {
           // 累積集氣
-          this.driftCharge += dt * this.stats.driftChargeRate;
+          this.driftCharge += dt * this.stats.driftChargeRate * (this.surface === 'ice' ? 1.25 : 1);
           if (this.driftCharge >= CONFIG.DRIFT_T3) this.driftLevel = 3;
           else if (this.driftCharge >= CONFIG.DRIFT_T2) this.driftLevel = 2;
           else if (this.driftCharge >= CONFIG.DRIFT_T1) this.driftLevel = 1;
@@ -174,7 +194,7 @@ export class Car {
 
           const into = steer * this.driftDir;
           const turnMultiplier = 0.6 + 0.4 * into;
-          const driftTurnRate = CONFIG.TURN_RATE * turnMultiplier;
+          const driftTurnRate = CONFIG.TURN_RATE * turnMultiplier * (0.6 + 0.4 * grip);
 
           const speedRatio = clamp(Math.abs(this.speed) / 8, 0, 1);
           this.heading -= this.driftDir * driftTurnRate * speedRatio * dt;
@@ -182,15 +202,22 @@ export class Car {
           this.visualDriftYaw = damp(this.visualDriftYaw, -this.driftDir * 0.43, 10, dt);
         }
       } else {
-        this.visualDriftYaw = damp(this.visualDriftYaw, 0, 10, dt);
+        // 冰面上車身會往外甩（視覺側滑），提醒玩家抓地力變差
+        const slideYaw = this.surface === 'ice' ? -steer * 0.3 * clamp(this.speed / CONFIG.MAX_SPEED, 0, 1) : 0;
+        this.visualDriftYaw = damp(this.visualDriftYaw, slideYaw, this.surface === 'ice' ? 3 : 10, dt);
         const speedRatio = clamp(Math.abs(this.speed) / 8, 0, 1);
         const steerDir = this.speed >= 0 ? 1 : -1;
         this.steerAngle = damp(this.steerAngle, steer * 0.45, 12, dt);
-        this.heading -= steer * CONFIG.TURN_RATE * speedRatio * steerDir * dt;
+        this.heading -= steer * CONFIG.TURN_RATE * grip * speedRatio * steerDir * dt;
       }
+
+      // 記錄給音效系統使用（甩尾時 throttle 會被強制為 1）
+      this.throttleInput = throttle;
+      this.brakeInput = brake;
 
       // 4. 加速度與速度計算
       const isOffroad = Math.abs(this.lateral) > (track.width / 2);
+      this.isOffroad = isOffroad;
       let baseMax = this.boostTimer > 0
         ? CONFIG.BOOST_SPEED * this.stats.boostSpeedMult
         : CONFIG.MAX_SPEED * this.stats.maxSpeedMult;
@@ -205,6 +232,15 @@ export class Car {
       if (isOffroad) {
         baseMax *= this.stats.offroadFactor;
         accel *= this.stats.offroadFactor;
+      }
+
+      let brakePower = CONFIG.BRAKE;
+      if (this.surface === 'sand') {
+        baseMax *= this.boostTimer > 0 ? 0.88 : 0.72;
+        accel *= 0.75;
+      } else if (this.surface === 'ice') {
+        accel *= 0.7;
+        brakePower *= 0.4;
       }
 
       if (this.isDrifting) {
@@ -223,7 +259,7 @@ export class Car {
         }
       } else if (brake > 0) {
         if (this.speed > 0) {
-          this.speed = Math.max(0, this.speed - brake * CONFIG.BRAKE * dt);
+          this.speed = Math.max(0, this.speed - brake * brakePower * dt);
         } else {
           this.speed = Math.max(-CONFIG.REVERSE_SPEED, this.speed - brake * (accel * 0.7) * dt);
         }
@@ -414,7 +450,7 @@ export class Car {
 
     // 1. 車輛模型本體
     let model = null;
-    const kartFile = (assets && assets.getKart) ? assets.getKart(this.slot) : null;
+    const kartFile = (assets && assets.getKart) ? assets.getKart(this.kart) : null;
     if (kartFile) {
       model = kartFile;
     } else {
@@ -425,7 +461,9 @@ export class Car {
     }
 
     if (kartFile) {
-      this._paintKart(model, colorHex);
+      // 車身烤漆＋換上選擇的車手（見 kartLook.js）
+      const look = buildKartLook(model, { driver: this.driver, color: colorHex });
+      this.paintedMaterials = look.materials;
     }
 
     const scale = CONFIG.KART_SCALE || 2.2;
@@ -524,39 +562,6 @@ export class Car {
     this.viewGroup.add(this.sparkGroup);
 
     scene.add(this.viewGroup);
-  }
-
-  // 依玩家顏色重新上色（四款車共用同一張 colormap 貼圖，原本看起來都一樣灰）
-  // 車身乘上玩家顏色、角色頭部乘上淡一點的玩家顏色，輪胎保持原色
-  _paintKart(model, colorHex) {
-    const bodyColor = new THREE.Color(colorHex);
-    const headColor = bodyColor.clone().lerp(new THREE.Color(0xffffff), 0.45);
-    const materialCache = new Map();
-
-    model.traverse((node) => {
-      if (!node.isMesh) return;
-
-      let part = 'body';
-      for (let p = node; p && p !== model; p = p.parent) {
-        if (p.name.startsWith('wheel')) part = 'wheel';
-        else if (p.name === 'character') part = 'head';
-      }
-      if (part === 'wheel') return;
-
-      const tint = part === 'head' ? headColor : bodyColor;
-      const swap = (mat) => {
-        const key = `${part}_${mat.uuid}`;
-        if (!materialCache.has(key)) {
-          const painted = mat.clone();
-          painted.color = tint.clone().multiplyScalar(1.35);
-          materialCache.set(key, painted);
-        }
-        return materialCache.get(key);
-      };
-      node.material = Array.isArray(node.material) ? node.material.map(swap) : swap(node.material);
-    });
-
-    this.paintedMaterials = [...materialCache.values()];
   }
 
   // 建立車尾天線旗：細桿＋玩家顏色號碼旗（前後各一面，從追尾鏡頭看過去號碼不會左右顛倒）
@@ -716,8 +721,13 @@ export class Car {
       });
       this.flagGroup = null;
     }
+    if (this.viewGroup) {
+      // 車手是程式建立的幾何體（不與其他車共用），一併釋放
+      const person = this.viewGroup.getObjectByName('driver');
+      person?.traverse((node) => node.geometry?.dispose?.());
+    }
     if (this.paintedMaterials) {
-      // 只釋放複製出的材質，共用的 colormap 貼圖不 dispose
+      // 只釋放複製出的材質與車手材質，共用的 colormap 貼圖不 dispose
       this.paintedMaterials.forEach((m) => m.dispose());
       this.paintedMaterials = null;
     }

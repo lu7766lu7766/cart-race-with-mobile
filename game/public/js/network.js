@@ -4,6 +4,7 @@
 //  透過 WebSocket 連線到伺服器建立房間、取得房號與 QR Code、
 //  接收手機加入並指派為 remote 玩家、轉發手機即時陀螺儀與按鈕輸入，
 //  以及將名次、圈數、道具等級（itemLevel）與震動事件即時回傳給各手機。
+//  大廳時手機可傳 { type:'customize', kart, driver, paint } 選擇角色、車手與烤漆（造型選擇）。
 // ============================================================
 
 // ------------------------------------------------------------
@@ -190,6 +191,18 @@ export function initNetwork(game) {
         return;
       }
 
+      // (E) 手機在大廳選擇造型（角色 kart、車手 driver、烤漆 paint），由 Game 驗證是否合法、顏色是否被選走
+      if (msg.type === 'customize') {
+        const { playerId, kart, driver, paint } = msg;
+        const entry = playerMap.get(playerId);
+        if (entry) {
+          const changed = game.setPlayerLook(entry.gamePlayer.id, { kart, driver, paint });
+          // 沒有改變（例如顏色已被別人選走）時也回傳一次，讓手機畫面還原成正確選項
+          if (!changed) sendPlayerStatus(entry.gamePlayer);
+        }
+        return;
+      }
+
       // (D) 收到手機輸入資料
       if (msg.type === 'input') {
         const { playerId, steer, throttle, brake, item } = msg;
@@ -256,8 +269,9 @@ export function initNetwork(game) {
   game.on('positionChanged', ({ player }) => sendPlayerStatus(player));
   game.on('lapChanged', ({ player }) => sendPlayerStatus(player));
 
-  // (2) 遊戲狀態改變（lobby -> countdown -> racing -> results 等）：對所有已連線手機廣播
-  game.on('stateChanged', () => {
+  // (2) 遊戲狀態改變（lobby -> countdown -> racing -> results 等）、
+  //     有人換造型（已被選走的顏色要更新）、換地圖：對所有已連線手機廣播
+  function broadcastStatus() {
     for (const [serverPlayerId, entry] of playerMap.entries()) {
       send({
         type: 'toPlayer',
@@ -268,7 +282,13 @@ export function initNetwork(game) {
         },
       });
     }
-  });
+  }
+  game.on('stateChanged', broadcastStatus);
+  game.on('playerLookChanged', broadcastStatus);
+  game.on('mapChanged', broadcastStatus);
+  game.on('difficultyChanged', broadcastStatus);
+  game.on('playerJoined', broadcastStatus);
+  game.on('playerLeft', broadcastStatus);
 
   // (3) 被道具擊中：傳送震動指令（300ms）
   game.on('playerHit', ({ player }) => {

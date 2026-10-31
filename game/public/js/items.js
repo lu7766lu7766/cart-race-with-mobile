@@ -36,6 +36,23 @@ export class ItemSystem {
     }
   }
 
+  // 換地圖時切換賽道：移除舊的 3D 物件，依新賽道重新擺放道具箱與加速板
+  // （之後由 main.js 呼叫 attachView 重新建立 3D 物件）
+  setTrack(track) {
+    const scene = this.scene;
+    const assets = this.assets;
+    const hadView = Boolean(this.viewGroup);
+    this.detachView();
+    this.track = track;
+    this.bananas = [];
+    this.missiles = [];
+    this._initBoxes();
+    this._initPads();
+    if (hadView && scene) {
+      this.attachView(scene, assets);
+    }
+  }
+
   // 初始化 4 個區域各 4 個道具箱（共 16 個，避開跳台與加速板）
   _initBoxes() {
     this.boxes = [];
@@ -146,14 +163,14 @@ export class ItemSystem {
             // 手上無道具：開始抽獎 Lv1
             racer.rolling = true;
             racer.rollingTimer = CONFIG.ITEM_ROLL_TIME;
-            if (this.game) this.game.emit('sound', { type: 'box' });
+            if (this.game) this.game.emit('sound', { type: 'box', player: racer });
           } else {
             // 手上已有道具：魔石升級（最多 Lv3）
             if (racer.itemLevel < 3) {
               racer.itemLevel = Math.min(3, (racer.itemLevel || 1) + 1);
               if (this.game) {
                 this.game.emit('itemChanged', { player: racer, item: racer.item, level: racer.itemLevel });
-                this.game.emit('sound', { type: 'upgrade' });
+                this.game.emit('sound', { type: 'upgrade', player: racer });
               }
             }
           }
@@ -161,14 +178,21 @@ export class ItemSystem {
       }
 
       // 檢查加速板（半徑 3.5，高度差 <= 2.5）
+      let onPad = false;
       for (const pad of this.pads) {
         const dx = car.x - pad.x;
         const dz = car.z - pad.z;
         const dy = Math.abs(car.y - pad.y);
         if (dx * dx + dz * dz <= pad.radius * pad.radius && dy <= 2.5) {
           car.applyBoost(CONFIG.PAD_BOOST_TIME);
+          onPad = true;
         }
       }
+      // 剛開上加速板的那一刻播一次音效（停在板子上不會一直重播）
+      if (onPad && !car.onBoostPad && this.game) {
+        this.game.emit('sound', { type: 'pad', player: racer });
+      }
+      car.onBoostPad = onPad;
     }
 
     // 4. 更新香蕉皮（碰撞半徑 1.8 / 巨大香蕉 3.6；高度差 <= 2.5）
@@ -200,7 +224,7 @@ export class ItemSystem {
           if (wasSpun) {
             if (this.game) {
               this.game.emit('playerHit', { player: racer, by: banana.ownerPlayerId });
-              this.game.emit('sound', { type: 'spin' });
+              this.game.emit('sound', { type: 'spin', player: racer });
             }
           }
           break;
@@ -266,7 +290,7 @@ export class ItemSystem {
           const wasHit = car.hitByMissile(missile.ownerPlayerId);
           if (wasHit && this.game) {
             this.game.emit('playerHit', { player: racer, by: missile.ownerPlayerId });
-            this.game.emit('sound', { type: 'hit' });
+            this.game.emit('sound', { type: 'hit', player: racer });
           }
           break;
         }
@@ -307,23 +331,23 @@ export class ItemSystem {
         const times = CONFIG.ITEM_LEVELS.nitro;
         const duration = times[level - 1] || times[0];
         car.applyBoost(duration, level);
-        if (this.game) this.game.emit('sound', { type: 'boost' });
+        if (this.game) this.game.emit('sound', { type: 'boost', player: racer, level });
         break;
       }
       case 'shield': {
         const times = CONFIG.ITEM_LEVELS.shield;
         const duration = times[level - 1] || times[0];
         car.applyShield(duration, level);
-        if (this.game) this.game.emit('sound', { type: 'shield' });
+        if (this.game) this.game.emit('sound', { type: 'shield', player: racer, level });
         break;
       }
       case 'banana':
         this._spawnBanana(racer, level);
-        if (this.game) this.game.emit('sound', { type: 'drop' });
+        if (this.game) this.game.emit('sound', { type: 'drop', player: racer, level });
         break;
       case 'missile':
         this._spawnMissile(racer, level);
-        if (this.game) this.game.emit('sound', { type: 'missile' });
+        if (this.game) this.game.emit('sound', { type: 'missile', player: racer, level });
         break;
     }
   }

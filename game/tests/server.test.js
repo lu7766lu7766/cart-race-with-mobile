@@ -3,7 +3,7 @@
 //  測試大螢幕建立房間（4 位數房號）、手機加入、錯誤房號處理、
 //  滿額阻擋（上限 4 人）、輸入數值伺服器端 clamp、toPlayer 定向轉發、
 //  手機斷線 playerLeft 通知、大螢幕斷線 roomClosed 通知、
-//  異常垃圾字串防崩潰容錯，以及 HTTPS 憑證自動生成。
+//  異常垃圾字串防崩潰容錯、HTTPS 憑證自動生成，以及造型選擇 customize 轉發。
 // ============================================================
 
 import test from 'node:test';
@@ -451,6 +451,43 @@ test('13. /api/server-info 帶 4 位數房號時，控制器網址與 QR Code �
     const badCode = await fetch(`${base}?code=12ab`).then((r) => r.json());
     assert.ok(badCode.controllerUrl.endsWith('/controller.html'));
   } finally {
+    await server.close();
+  }
+});
+
+test('14. 手機送出 customize（造型選擇）轉給大螢幕並附上 playerId，非法值變成 null、多餘欄位被丟棄', async () => {
+  const server = await startServer({ httpPort: 0, httpsPort: null });
+  await server.ready;
+  const clients = [];
+
+  try {
+    const host = await connectClient(server.httpPort);
+    clients.push(host);
+    host.send(JSON.stringify({ type: 'host' }));
+    const { code } = await waitForMessage(host, (m) => m.type === 'roomCreated');
+
+    const phone = await connectClient(server.httpPort);
+    clients.push(phone);
+    phone.send(JSON.stringify({ type: 'join', code, name: '造型玩家' }));
+    const { playerId } = await waitForMessage(phone, (m) => m.type === 'joined');
+
+    phone.send(JSON.stringify({ type: 'customize', kart: 2, driver: 6, paint: 5, evil: '<script>' }));
+    const ok = await waitForMessage(host, (m) => m.type === 'customize');
+    assert.deepEqual(ok, { type: 'customize', playerId, kart: 2, driver: 6, paint: 5 });
+
+    phone.send(JSON.stringify({ type: 'customize', kart: 1.5, driver: 99, paint: 'red' }));
+    const bad = await waitForMessage(host, (m) => m.type === 'customize');
+    assert.equal(bad.kart, null);
+    assert.equal(bad.driver, null);
+    assert.equal(bad.paint, null);
+
+    // 大螢幕本身送 customize 不會被轉發（只有手機身分可以）
+    host.send(JSON.stringify({ type: 'customize', kart: 0, paint: 0 }));
+    await assert.rejects(waitForMessage(phone, (m) => m.type === 'customize', 300));
+  } finally {
+    for (const c of clients) {
+      try { c.terminate(); } catch (e) {}
+    }
     await server.close();
   }
 });

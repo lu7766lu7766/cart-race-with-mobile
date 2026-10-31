@@ -117,19 +117,77 @@ export class OverviewCamera {
     this.orbitAngle = 0;
   }
 
-  // 大廳環繞視角
-  updateLobby(dt) {
-    this.orbitAngle += 0.25 * dt;
-    const r = 85;
-    const cx = 0;
-    const cz = 110 * 1.15; // 起點直道附近
-    this.camera.position.set(cx + Math.cos(this.orbitAngle) * r, 35, cz + Math.sin(this.orbitAngle) * r);
-    this.camera.lookAt(cx, 5, cz);
+  // 換地圖時切換賽道（清除快取的包圍盒與距離）
+  setTrack(track) {
+    this.track = track;
+    this._lobbyPos = null; // 換地圖時鏡頭直接跳到新地圖
+    this._bounds = undefined;
+    this._fitAspect = null;
+    this._fitDist = null;
+  }
+
+  // 大廳展示視角（三種模式，切換時鏡頭平滑移動）：
+  //   focus = null                     ：在起跑格附近慢速環繞，展示 4 台車
+  //   focus = { type: 'tour' }         ：剛換地圖時，從高空環繞整張地圖預覽地形
+  //   focus = { type: 'kart', x, y, z }：剛換造型時，特寫該台卡丁車與車手
+  // shiftRatio > 0 時用 setViewOffset 把畫面焦點往右移（左側留給大廳選單）
+  updateLobby(dt, shiftRatio = 0, focus = null) {
+    const targetPos = new THREE.Vector3();
+    const targetLook = new THREE.Vector3();
+
+    if (focus && focus.type === 'tour' && this.track) {
+      this.orbitAngle += 0.35 * dt;
+      const b = this._trackBounds();
+      const span = Math.max(b.halfW, b.halfD);
+      targetPos.set(b.cx + Math.cos(this.orbitAngle) * span * 1.05, span * 0.6, b.cz + Math.sin(this.orbitAngle) * span * 1.05);
+      targetLook.set(b.cx, 0, b.cz);
+    } else if (focus && focus.type === 'kart') {
+      // 從車頭斜前方看（左右緩慢擺動），車手的臉與車身都看得到
+      this.focusTime = (this.focusTime || 0) + dt;
+      const a = (focus.heading || 0) + Math.sin(this.focusTime * 0.8) * 0.9;
+      const r = 8;
+      targetPos.set(focus.x + Math.sin(a) * r, focus.y + 3.4, focus.z + Math.cos(a) * r);
+      targetLook.set(focus.x, focus.y + 1.4, focus.z);
+    } else {
+      this.orbitAngle += 0.22 * dt;
+      let cx = 0, cy = 0, cz = 0;
+      if (this.track) {
+        // 焦點：4 個發車格的中心
+        for (let slot = 0; slot < 4; slot++) {
+          const g = this.track.startGrid(slot);
+          cx += g.x / 4; cy += g.y / 4; cz += g.z / 4;
+        }
+      }
+      const r = 32;
+      targetPos.set(cx + Math.cos(this.orbitAngle) * r, cy + 11, cz + Math.sin(this.orbitAngle) * r);
+      targetLook.set(cx, cy + 1.2, cz);
+    }
+
+    // 平滑移動（第一次直接就位）
+    if (!this._lobbyPos) {
+      this._lobbyPos = targetPos.clone();
+      this._lobbyLook = targetLook.clone();
+    } else {
+      const k = 1 - Math.exp(-2.5 * dt);
+      this._lobbyPos.lerp(targetPos, k);
+      this._lobbyLook.lerp(targetLook, k);
+    }
+    this.camera.position.copy(this._lobbyPos);
+    this.camera.lookAt(this._lobbyLook);
+
+    const w = 1000;
+    const h = w / (this.camera.aspect || 1);
+    if (shiftRatio > 0) {
+      this.camera.setViewOffset(w, h, -w * shiftRatio, 0, w, h);
+    } else {
+      this.camera.clearViewOffset();
+    }
     this.camera.updateProjectionMatrix();
   }
 
   // 全場俯視（依目前畫面比例算出剛好框住整條賽道的距離，讓賽道盡量放大）
   updateOverview() {
+    this.camera.clearViewOffset();
     const bounds = this._trackBounds();
     if (!bounds) {
       this.camera.position.set(0, 360, 260);
@@ -194,7 +252,7 @@ export class OverviewCamera {
       if (p.z < minZ) minZ = p.z;
       if (p.z > maxZ) maxZ = p.z;
     }
-    const edge = CONFIG.TRACK_WIDTH / 2 + CONFIG.SHOULDER;
+    const edge = (this.track.width || CONFIG.TRACK_WIDTH) / 2 + CONFIG.SHOULDER;
     this._bounds = {
       cx: (minX + maxX) / 2,
       cz: (minZ + maxZ) / 2,

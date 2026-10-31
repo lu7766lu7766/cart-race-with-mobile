@@ -5,7 +5,7 @@
 //  本模組為純邏輯運算，在 Node.js 中可正常 import 執行。
 // ============================================================
 
-import { CONFIG } from './config.js';
+import { CONFIG, DIFFICULTIES } from './config.js';
 import { clamp, angleDiff, rand } from './utils.js';
 
 export class AIInput {
@@ -14,9 +14,18 @@ export class AIInput {
     this.game = game;
     this.rng = rng || (game && game.rng) || Math.random;
 
-    // 每台 AI 擁有各自的車道偏移（-4 ~ 4）與速度係數（0.92 ~ 0.96）
-    this.laneOffset = rand(-4, 4, this.rng);
-    this.speedFactor = speedFactor ?? rand(CONFIG.AI_SPEED_MIN, CONFIG.AI_SPEED_MAX, this.rng);
+    // 依大廳選擇的難度決定電腦強度（沒有 game 時使用普通難度）
+    this.difficulty = DIFFICULTIES.find((d) => d.id === game?.difficulty)
+      || DIFFICULTIES.find((d) => d.id === 'normal');
+
+    // 每台 AI 擁有各自的車道偏移（-4 ~ 4，窄路地圖會再縮小）與速度係數（依難度）
+    const laneMax = Math.min(4, ((car?.track?.width) || CONFIG.TRACK_WIDTH) / 2 - 2.5);
+    this.laneOffset = rand(-laneMax, laneMax, this.rng);
+    const [speedMin, speedMax] = this.difficulty.id === 'normal'
+      ? [CONFIG.AI_SPEED_MIN, CONFIG.AI_SPEED_MAX]
+      : this.difficulty.aiSpeed;
+    this.speedFactor = speedFactor ?? rand(speedMin, speedMax, this.rng);
+    this.isCruise = speedFactor != null; // 完賽後的慢速巡航不套用追趕機制
 
     // 卡住脫困判定狀態
     this.isUnstucking = false;
@@ -99,7 +108,7 @@ export class AIInput {
     if (Math.abs(car.lateral) > (track.width / 2)) {
       currentBaseMax *= car.stats.offroadFactor;
     }
-    const maxAllowedSpeed = currentBaseMax * this.speedFactor;
+    const maxAllowedSpeed = currentBaseMax * (this.speedFactor + this._catchUpBonus(car));
 
     if (Math.abs(diff) > 0.85) {
       throttle = 0.2;
@@ -132,7 +141,9 @@ export class AIInput {
           this.targetPassIndex = this._findNextBoxRowIndex(car.trackIndex, track);
         } else {
           this.holdForUpgrade = false;
-          this.itemWaitTimer = rand(1.0, 3.0, this.rng);
+          // 普通難度維持原本 1 ~ 3 秒；其他難度依 itemDelay 調整
+          const [d0, d1] = this.difficulty.id === 'normal' ? [1.0, 3.0] : [this.difficulty.itemDelay[0] + 0.5, this.difficulty.itemDelay[1] + 1.0];
+          this.itemWaitTimer = rand(d0, d1, this.rng);
         }
       }
 
@@ -150,7 +161,7 @@ export class AIInput {
 
         if (hasPassed || this.holdTimer <= 0) {
           this.holdForUpgrade = false;
-          this.itemWaitTimer = rand(0.5, 2.0, this.rng);
+          this.itemWaitTimer = rand(this.difficulty.itemDelay[0], this.difficulty.itemDelay[1], this.rng);
         }
       }
 
@@ -190,6 +201,18 @@ export class AIInput {
     }
 
     return { steer, throttle, brake, useItem };
+  }
+
+  // 追趕機制（困難模式）：落後最前面的真人超過 1/6 圈時加速
+  _catchUpBonus(car) {
+    const bonus = this.difficulty.catchUp || 0;
+    if (!bonus || this.isCruise || !this.game) return 0;
+    let leader = -Infinity;
+    for (const r of this.game.racers || []) {
+      if (r.kind !== 'ai' && r.car) leader = Math.max(leader, r.car.progress);
+    }
+    if (leader === -Infinity) return 0;
+    return leader - car.progress > car.track.N / 6 ? bonus : 0;
   }
 
   // 尋找沿賽道前方的下一排道具箱索引

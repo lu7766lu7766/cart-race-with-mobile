@@ -352,6 +352,26 @@ export function createRoomHub({ rng = Math.random } = {}) {
     }
 
     // --------------------------------------------------------
+    // (C-2) 手機在大廳選擇造型：{ type: 'customize', kart, driver, paint }
+    //       只接受 0 ~ 15 的整數，其他欄位一律丟棄；是否合法（顏色被選走等）由大螢幕的 Game 判斷
+    // --------------------------------------------------------
+    if (msg.type === 'customize') {
+      if (socket.roomRole !== 'player' || !socket.roomCode || !socket.playerId) return;
+      const room = rooms.get(socket.roomCode);
+      if (!room || !room.hostSocket) return;
+
+      const toIndex = (v) => (Number.isInteger(v) && v >= 0 && v <= 15 ? v : null);
+      send(room.hostSocket, {
+        type: 'customize',
+        playerId: socket.playerId,
+        kart: toIndex(msg.kart),
+        driver: toIndex(msg.driver),
+        paint: toIndex(msg.paint),
+      });
+      return;
+    }
+
+    // --------------------------------------------------------
     // (D) 大螢幕回傳給指定手機：{ type: 'toPlayer', playerId, data }
     // --------------------------------------------------------
     if (msg.type === 'toPlayer') {

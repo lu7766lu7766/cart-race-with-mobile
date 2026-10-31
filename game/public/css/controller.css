@@ -420,6 +420,209 @@ html, body {
 }
 
 /* ============================================================
+   大廳造型選擇面板（橫向手機，高度有限，盡量緊湊）
+   ============================================================ */
+.look-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(15, 17, 26, 0.94);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 25;
+  padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  overflow-y: auto;
+}
+
+.look-card {
+  width: 100%;
+  max-width: 760px;
+  max-height: 100%;
+}
+
+.look-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.look-header h2 {
+  font-size: 18px;
+  color: #f6b93b;
+}
+
+.look-map {
+  font-size: 12px;
+  color: #a4b0be;
+}
+
+.look-section-title {
+  font-size: 12px;
+  color: #dcdde1;
+  margin: 6px 0 4px;
+}
+
+.look-karts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.look-kart {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-family: inherit;
+}
+
+.look-kart.selected {
+  border-color: #f6b93b;
+  background: rgba(246, 185, 59, 0.18);
+}
+
+.look-kart-emoji {
+  font-size: 18px;
+}
+
+.look-kart-name {
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.look-kart-ability {
+  display: none;
+  font-size: 10px;
+  color: #a4b0be;
+  line-height: 1.2;
+}
+
+.look-paints {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
+}
+
+.look-paint {
+  height: 32px;
+  border-radius: 10px;
+  border: 3px solid transparent;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: bold;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.look-paint.selected {
+  border-color: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+}
+
+.look-paint.taken {
+  opacity: 0.25;
+  filter: grayscale(0.8);
+}
+
+.look-body {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.look-preview {
+  position: relative;
+  flex: 0 0 34%;
+  min-height: 190px;
+  border-radius: 12px;
+  background: radial-gradient(circle at 50% 35%, #3d4663 0%, #1b1f2e 75%);
+  overflow: hidden;
+}
+
+.look-preview canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.look-preview-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 6px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.look-preview-fallback {
+  display: none;
+  position: absolute;
+  inset: 0;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #a4b0be;
+}
+
+.no-webgl .look-preview-fallback {
+  display: flex;
+}
+
+.look-options {
+  flex: 1;
+  min-width: 0;
+}
+
+.look-drivers {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 5px;
+}
+
+.look-driver {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 2px;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-family: inherit;
+}
+
+.look-driver.selected {
+  border-color: #f6b93b;
+  background: rgba(246, 185, 59, 0.18);
+}
+
+.look-driver-emoji {
+  font-size: 18px;
+}
+
+.look-driver-name {
+  font-size: 10px;
+}
+
+.look-wait {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #a4b0be;
+}
+
+/* ============================================================
    受擊紅框閃爍疊層
    ============================================================ */
 .flash-overlay {

@@ -8,36 +8,22 @@
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
 import { clamp, lerp } from './utils.js';
+import { getMap, DEFAULT_MAP_ID } from './maps.js';
 
 export class Track {
-  constructor() {
-    this.width = CONFIG.TRACK_WIDTH;       // 路面寬度（16）
+  // mapId：地圖代號（見 maps.js），不給時使用預設地圖「陽光草原」
+  constructor(mapId = DEFAULT_MAP_ID) {
+    this.map = getMap(mapId);
+    this.mapId = this.map.id;
+    this.theme = this.map.theme;
+    this.width = this.map.width || CONFIG.TRACK_WIDTH; // 路面寬度（每張地圖不同）
     this.shoulder = CONFIG.SHOULDER;       // 路肩草地寬度（4）
     this.N = CONFIG.TRACK_SAMPLES || 900;  // 取樣點數量（加長賽道至 900 點）
 
-    // 設計 18 個賽道控制點（總長 1200 ~ 1500，具備長上坡、高點跳台、下坡、S彎與髮夾急彎）
-    // 座標經過嚴格幾何安排，確保任兩段賽道直線間距充足，避免賽道自我重疊
-    const S = 1.15; // 尺度放大係數以確保長度介於 1200 ~ 1500
-    const controlPoints = [
-      new THREE.Vector3(0 * S, 0, 110 * S),         // 0: 起終點大直道（平坦 y=0）
-      new THREE.Vector3(80 * S, 0, 110 * S),        // 1: 直道加速段
-      new THREE.Vector3(160 * S, 2.0, 100 * S),     // 2: 第 1 彎進彎，開始緩上坡
-      new THREE.Vector3(210 * S, 5.0, 60 * S),      // 3: 高速弧形右彎長上坡
-      new THREE.Vector3(230 * S, 8.5, 0 * S),       // 4: 接近坡頂
-      new THREE.Vector3(210 * S, 9.5, -60 * S),     // 5: 坡頂至高點（高度 ~9.5）
-      new THREE.Vector3(160 * S, 7.5, -100 * S),    // 6: 坡頂下坡直道（跳台設置處）
-      new THREE.Vector3(90 * S, 4.0, -115 * S),     // 7: 快速下坡衝刺
-      new THREE.Vector3(20 * S, 2.0, -100 * S),     // 8: 緩衝平緩彎道
-      new THREE.Vector3(-40 * S, 1.0, -125 * S),    // 9: S 彎入口
-      new THREE.Vector3(-100 * S, 3.0, -145 * S),   // 10: S 彎中段切換
-      new THREE.Vector3(-165 * S, 5.0, -130 * S),   // 11: 髮夾彎前置坡道
-      new THREE.Vector3(-215 * S, 4.0, -80 * S),    // 12: 髮夾急彎煞車點
-      new THREE.Vector3(-230 * S, 2.0, -20 * S),    // 13: 髮夾急彎頂點（180度）
-      new THREE.Vector3(-210 * S, 0.5, 40 * S),     // 14: 髮夾彎出彎下坡
-      new THREE.Vector3(-160 * S, 0, 80 * S),       // 15: 接回低處平原直道
-      new THREE.Vector3(-110 * S, 0, 105 * S),      // 16: 回歸大直道前 S 緩彎
-      new THREE.Vector3(-50 * S, 0, 110 * S),       // 17: 接回起終點直道
-    ];
+    // 由地圖資料建立賽道控制點（x、z 乘上 scale 放大，y 為路面高度）
+    // 座標經過幾何安排，確保任兩段賽道直線間距充足，避免賽道自我重疊
+    const S = this.map.scale || 1;
+    const controlPoints = this.map.points.map(([x, y, z]) => new THREE.Vector3(x * S, y, z * S));
 
     // 建立 3D 封閉曲線
     this.curve = new THREE.CatmullRomCurve3(controlPoints, true, 'centripetal');
@@ -51,10 +37,24 @@ export class Track {
 
     this._precompute();
 
-    // 跳台設置：坡頂下坡處（索引約 340 處，遠離道具箱與加速板 > 15 單位）
-    this.jumps = [
-      { index: 340 },
-    ];
+    // 跳台設置：由地圖資料指定取樣點索引（遠離道具箱與加速板 > 15 單位）
+    this.jumps = (this.map.jumps || []).map((index) => ({ index }));
+
+    // 天氣粒子（例如飄雪），buildMeshes 時建立
+    this.weatherPoints = null;
+
+    // 特殊路段：把地圖的 zones（比例）換算成每個取樣點的路面種類
+    // surface[i] 為 'sand' / 'ice' / null，影響車輛物理（見 car.js）
+    this.zones = (this.map.zones || []).map((z) => ({
+      type: z.type,
+      start: Math.floor(z.from * this.N),
+      end: Math.floor(z.to * this.N),
+    }));
+    this.surface = new Array(this.N).fill(null);
+    for (const zone of this.zones) {
+      if (zone.type !== 'sand' && zone.type !== 'ice') continue;
+      for (const i of this._zoneIndices(zone)) this.surface[i] = zone.type;
+    }
   }
 
   // 預先計算取樣點的幾何資料（點、高度、切線、右手邊法線、累積長度）
@@ -93,6 +93,121 @@ export class Track {
     const pLast = this.points[this.N - 1];
     const pFirst = this.points[0];
     this.length = accumulated + Math.hypot(pFirst.x - pLast.x, pFirst.z - pLast.z);
+
+    // 每個取樣點的彎道半徑與彎內側（+1 右側 / -1 左側），
+    // 讓急彎內側的裙邊縮短，避免網格摺疊穿面（髮夾彎很重要）
+    const N = this.N;
+    const k = 2; // 用很短的弦長量曲率，才抓得到 Catmull-Rom 曲線上局部變急的地方
+    const rawR = [];
+    this.innerSide = [];
+    for (let i = 0; i < N; i++) {
+      const a = this.points[(i - k + N) % N];
+      const b = this.points[i];
+      const c = this.points[(i + k) % N];
+      const ab = Math.hypot(b.x - a.x, b.z - a.z);
+      const bc = Math.hypot(c.x - b.x, c.z - b.z);
+      const ca = Math.hypot(a.x - c.x, a.z - c.z);
+      const cross = Math.abs((b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x));
+      rawR.push(cross > 1e-6 ? (ab * bc * ca) / (2 * cross) : 1e6);
+      const mx = (a.x + c.x) / 2 - b.x;
+      const mz = (a.z + c.z) / 2 - b.z;
+      this.innerSide.push(mx * this.normals[i].x + mz * this.normals[i].z >= 0 ? 1 : -1);
+    }
+    // 取前後 10 個取樣點中最小的半徑（讓裙邊寬度平順變化）
+    this.radius = rawR.map((_, i) => {
+      let m = Infinity;
+      for (let o = -10; o <= 10; o++) m = Math.min(m, rawR[(i + o + N) % N]);
+      return m;
+    });
+  }
+
+  // 列出某個特殊路段涵蓋的取樣點索引（支援跨過起點的路段）
+  _zoneIndices(zone) {
+    const list = [];
+    const len = (zone.end - zone.start + this.N) % this.N;
+    for (let k = 0; k <= len; k++) list.push((zone.start + k) % this.N);
+    return list;
+  }
+
+  // 取得取樣點的路面種類：'sand'（流沙）、'ice'（結冰）或 null（一般路面）
+  surfaceAt(index) {
+    const i = ((Math.floor(index) % this.N) + this.N) % this.N;
+    return this.surface[i];
+  }
+
+  // 某種外觀路段（canyon / tunnel）在 index 處的強度 0 ~ 1，兩端 15 個取樣點平滑過渡
+  zoneFactor(index, type) {
+    let best = 0;
+    for (const zone of this.zones) {
+      if (zone.type !== type) continue;
+      const len = (zone.end - zone.start + this.N) % this.N;
+      const k = (index - zone.start + this.N) % this.N;
+      if (k > len) continue;
+      const edge = Math.min(k, len - k);
+      best = Math.max(best, clamp(edge / 15, 0, 1));
+    }
+    return best;
+  }
+
+  // ------------------------------------------------------------
+  // 地形高度（只影響外觀，車輛只在路面上跑）
+  // 靠近賽道的地面在路面下方；往外逐漸變成每張地圖自己的地形：
+  //   hills 山丘、dunes 沙丘（峽谷路段兩側變成岩壁）、mountains 越往外越高的雪山谷地
+  // ------------------------------------------------------------
+
+  // 平滑的假雜訊（多個正弦波疊加），回傳約 -1 ~ 1
+  _noise(x, z) {
+    return (
+      Math.sin(x * 0.021 + 1.7) * Math.cos(z * 0.018 - 0.6) +
+      0.6 * Math.sin((x + z) * 0.043 + 2.1) +
+      0.35 * Math.cos((x - 2 * z) * 0.07)
+    ) / 1.95;
+  }
+
+  // 快速找出最接近 (x, z) 的路段：先每 6 個取樣點粗找，再用 project 局部精算
+  _nearest(x, z) {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < this.N; i += 6) {
+      const p = this.points[i];
+      const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z);
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return this.project(x, z, best);
+  }
+
+  // 世界座標 (x, z) 的地形高度
+  terrainHeight(x, z) {
+    const proj = this._nearest(x, z);
+    const d = Math.abs(proj.lateral);
+    const h = this.groundHeight(proj.index, proj.t);
+    const edge = this.width / 2 + this.shoulder + 12; // 裙邊外緣
+    const base = Math.max(-0.1, h - 1.5);              // 路面旁的地面高度（藏在裙邊下）
+    if (d <= edge) return base;
+
+    const terrain = this.theme.terrain || { type: 'flat' };
+    const n = this._noise(x, z);
+    const out = d - edge;
+    let far = 0;
+    let blend = 40;
+
+    if (terrain.type === 'hills') {
+      far = terrain.amp * (0.5 + 0.5 * n);
+    } else if (terrain.type === 'dunes') {
+      const dunes = terrain.amp * (0.5 + 0.5 * n);
+      const canyon = this.zoneFactor(proj.index, 'canyon');
+      far = dunes + canyon * (terrain.cliff + 6 * n - dunes);
+      blend = 40 - 28 * canyon; // 峽谷：岩壁緊貼路邊
+    } else if (terrain.type === 'mountains') {
+      far = base + Math.min(terrain.max, out * terrain.rise) + terrain.amp * (0.5 + 0.5 * n);
+    }
+
+    // 高架路段下方的地面形成自然緩坡（不會變成細細的山脊）
+    far = Math.max(far, base - out * 0.25);
+
+    const w = clamp(out / blend, 0, 1);
+    const smooth = w * w * (3 - 2 * w);
+    return lerp(base, far, smooth);
   }
 
   // 計算任意賽道片段與插值參數 t 之地面世界高度
@@ -222,17 +337,9 @@ export class Track {
     this.meshesGroup = new THREE.Group();
     this.meshesGroup.name = 'trackMeshes';
 
-    // 1. 寬廣草地大平面（y = -0.08，維持在 -0.05 以下）
-    const grassGeo = new THREE.PlaneGeometry(1600, 1600);
-    const grassMat = new THREE.MeshStandardMaterial({
-      color: 0x27ae60,
-      roughness: 0.9,
-    });
-    const grass = new THREE.Mesh(grassGeo, grassMat);
-    grass.rotation.x = -Math.PI / 2;
-    grass.position.y = -0.08;
-    grass.receiveShadow = true;
-    this.meshesGroup.add(grass);
+    // 1. 地形（山丘 / 沙丘與峽谷 / 雪山谷地）＋ 遠處大平面
+    const theme = this.theme;
+    this._buildTerrain();
 
     // 2. 賽道路面、1單位紅白路肩、3單位草地路肩與裙邊
     const halfW = this.width / 2;
@@ -250,6 +357,8 @@ export class Track {
     const shoulderIndices = [];
     const skirtPositions = [];
     const skirtIndices = [];
+    const curbColorA = new THREE.Color(theme.curb[0]);
+    const curbColorB = new THREE.Color(theme.curb[1]);
 
     for (let i = 0; i <= this.N; i++) {
       const idx = i % this.N;
@@ -286,11 +395,12 @@ export class Track {
       curbPositions.push(rx, h + 0.007, rz);
       curbPositions.push(crx, h + 0.007, crz);
 
-      // 紅白交替顏色（每 6 個取樣點切換一次）
+      // 路肩兩色交替（每 6 個取樣點切換一次，顏色由地圖主題決定）
       const isRed = (Math.floor(idx / 6) % 2) === 0;
-      const cr = isRed ? 0.9 : 1.0;
-      const cg = isRed ? 0.2 : 1.0;
-      const cb = isRed ? 0.2 : 1.0;
+      const curbCol = isRed ? curbColorA : curbColorB;
+      const cr = curbCol.r;
+      const cg = curbCol.g;
+      const cb = curbCol.b;
       curbColors.push(cr, cg, cb, cr, cg, cb, cr, cg, cb, cr, cg, cb);
 
       if (i < this.N) {
@@ -325,20 +435,25 @@ export class Track {
         shoulderIndices.push(shV + 3, shV + 7, shV + 6);
       }
 
-      // 牆外裙邊（斜坡延伸 ~12 單位至 y=-0.05 地面）
+      // 牆外裙邊（斜坡延伸 ~12 單位到地面）；急彎內側縮短到不超過彎道半徑的 85%，避免摺疊
       const skirtW = 12.0;
-      const slx = s.point.x - (totalHalfW + skirtW) * s.normal.x;
-      const slz = s.point.z - (totalHalfW + skirtW) * s.normal.z;
-      const srx = s.point.x + (totalHalfW + skirtW) * s.normal.x;
-      const srz = s.point.z + (totalHalfW + skirtW) * s.normal.z;
+      const innerW = clamp(this.radius[idx] * 0.85 - totalHalfW, 0.5, skirtW);
+      const skirtL = this.innerSide[idx] < 0 ? innerW : skirtW;
+      const skirtR = this.innerSide[idx] > 0 ? innerW : skirtW;
+      const slx = s.point.x - (totalHalfW + skirtL) * s.normal.x;
+      const slz = s.point.z - (totalHalfW + skirtL) * s.normal.z;
+      const srx = s.point.x + (totalHalfW + skirtR) * s.normal.x;
+      const srz = s.point.z + (totalHalfW + skirtR) * s.normal.z;
 
       const skirtV = skirtPositions.length / 3;
       // 左裙邊：路肩外側(olx, h, olz) 到 地面(slx, -0.05, slz)
+      // 裙邊外緣接到地形高度（與 terrainHeight 在裙邊外緣的值相同）
+      const skirtBottom = Math.max(-0.1, h - 1.5);
       skirtPositions.push(olx, h, olz);
-      skirtPositions.push(slx, -0.05, slz);
+      skirtPositions.push(slx, skirtBottom, slz);
       // 右裙邊：路肩外側(orx, h, orz) 到 地面(srx, -0.05, srz)
       skirtPositions.push(orx, h, orz);
-      skirtPositions.push(srx, -0.05, srz);
+      skirtPositions.push(srx, skirtBottom, srz);
 
       if (i < this.N) {
         // 左裙邊（朝 +Y）
@@ -357,7 +472,7 @@ export class Track {
     roadGeo.computeVertexNormals();
 
     const roadMat = new THREE.MeshStandardMaterial({
-      color: 0x2c3e50,
+      color: theme.road,
       roughness: 0.8,
     });
     const roadMesh = new THREE.Mesh(roadGeo, roadMat);
@@ -388,7 +503,7 @@ export class Track {
     shoulderGeo.computeVertexNormals();
 
     const shoulderMat = new THREE.MeshStandardMaterial({
-      color: 0x1e824c,
+      color: theme.shoulder,
       roughness: 0.9,
     });
     const shoulderMesh = new THREE.Mesh(shoulderGeo, shoulderMat);
@@ -403,7 +518,7 @@ export class Track {
     skirtGeo.computeVertexNormals();
 
     const skirtMat = new THREE.MeshStandardMaterial({
-      color: 0x1e824c,
+      color: theme.shoulder,
       roughness: 0.9,
     });
     const skirtMesh = new THREE.Mesh(skirtGeo, skirtMat);
@@ -436,7 +551,7 @@ export class Track {
     centerGeo.setIndex(centerIndices);
     centerGeo.computeVertexNormals();
     const centerMat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
+      color: theme.roadLine,
       roughness: 0.5,
     });
     const centerMesh = new THREE.Mesh(centerGeo, centerMat);
@@ -508,10 +623,18 @@ export class Track {
     // 5. 跳台楔形斜坡 3D 網格（高 1.5、長 6、全路寬）
     this._buildJumpRamps();
 
+    // 5-1. 特殊路段：流沙、結冰路面與隧道
+    this._buildZoneOverlays();
+
     // 6. Kenney 場景裝飾（門架、看台、帳篷、樹木、路燈）
     if (assets) {
       this._buildDecorations(assets);
     }
+
+    // 7. 地圖專屬遠景（沙漠岩柱、雪地松樹）與天氣粒子（飄雪）
+    if (theme.scenery === 'mesas') this._buildMesas();
+    if (theme.scenery === 'pines') this._buildPines();
+    if (theme.weather === 'snow') this._buildSnowfall();
 
     scene.add(this.meshesGroup);
   }
@@ -523,6 +646,8 @@ export class Track {
     const positions = [];
     const colors = [];
     const indices = [];
+    const wallColorA = new THREE.Color(this.theme.wall[0]);
+    const wallColorB = new THREE.Color(this.theme.wall[1]);
 
     for (let side of [-1, 1]) {
       const baseIdx = positions.length / 3;
@@ -538,10 +663,8 @@ export class Track {
         positions.push(wx, topY, wz);
 
         const isRed = (Math.floor(idx / 8) % 2) === 0;
-        const r = isRed ? 0.85 : 0.95;
-        const g = isRed ? 0.15 : 0.95;
-        const b = isRed ? 0.15 : 0.95;
-        colors.push(r, g, b, r, g, b);
+        const c = isRed ? wallColorA : wallColorB;
+        colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
 
         if (i < this.N) {
           const v = baseIdx + i * 2;
@@ -576,7 +699,7 @@ export class Track {
   // 建立跳台 3D 楔形網格
   _buildJumpRamps() {
     const rampMat = new THREE.MeshStandardMaterial({
-      color: 0xf39c12,
+      color: this.theme.ramp,
       roughness: 0.5,
     });
 
@@ -649,6 +772,7 @@ export class Track {
       const gantryScale = gantryWidth / 1.26;
       lights.scale.set(gantryScale, gantryScale * 0.7, gantryScale);
       lights.rotation.y = Math.atan2(startS.tangent.x, startS.tangent.z);
+      lights.userData.fromAsset = true;
       lights.traverse((node) => {
         if (node.isMesh) {
           node.castShadow = true;
@@ -658,7 +782,7 @@ export class Track {
     }
 
     // 沿賽道兩側間距擺放裝飾物
-    const propTypes = ['treeLarge', 'treeSmall', 'grandStand', 'grandStandCovered', 'tent', 'billboard', 'lightPostModern'];
+    const propTypes = this.theme.props;
     for (let i = 0; i < this.N; i += 30) {
       const s = this.sampleAt(i);
       for (const side of [-1, 1]) {
@@ -673,11 +797,12 @@ export class Track {
         const propName = propTypes[(i + (side > 0 ? 1 : 0)) % propTypes.length];
         const prop = assets.getProp ? assets.getProp(propName) : null;
         if (prop) {
-          // 擺放在外側平面草地上（y = 0，避免起伏山丘路段懸空）
-          prop.position.set(px, 0, pz);
+          // 擺放在地形表面上
+          prop.position.set(px, this.terrainHeight(px, pz), pz);
           const pScale = propName.startsWith('tree') ? scale * 1.2 : scale;
           prop.scale.set(pScale, pScale, pScale);
           prop.rotation.y = Math.atan2(s.tangent.x, s.tangent.z) + (side > 0 ? Math.PI : 0);
+          prop.userData.fromAsset = true;
 
           // 效能優化：小型物件不投影
           const isHeavyProp = (propName === 'treeLarge' || propName.startsWith('grandStand'));
@@ -693,10 +818,343 @@ export class Track {
     }
   }
 
-  // 清除 3D 物件
+  // 建立地形網格：依 terrainHeight 抬高頂點，並依高度上色（低處 colorLow → 高處 colorHigh）
+  _buildTerrain() {
+    const terrain = this.theme.terrain || {};
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of this.points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    const margin = 260;
+    const sizeX = maxX - minX + margin * 2;
+    const sizeZ = maxZ - minZ + margin * 2;
+    const segX = Math.ceil(sizeX / 6);
+    const segZ = Math.ceil(sizeZ / 6);
+    const geo = new THREE.PlaneGeometry(sizeX, sizeZ, segX, segZ);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate((minX + maxX) / 2, 0, (minZ + maxZ) / 2);
+
+    const pos = geo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const low = new THREE.Color(terrain.colorLow ?? this.theme.ground);
+    const high = new THREE.Color(terrain.colorHigh ?? this.theme.ground);
+    const peak = new THREE.Color(0xffffff);
+    const top = terrain.type === 'dunes' ? terrain.cliff : (terrain.type === 'mountains' ? terrain.max : (terrain.amp || 1));
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const y = this.terrainHeight(x, z);
+      pos.setY(i, y);
+      const k = clamp(y / (top || 1), 0, 1);
+      c.copy(low).lerp(high, k);
+      if (terrain.type === 'mountains' && k > 0.65) c.lerp(peak, (k - 0.65) / 0.35); // 雪山頂積雪
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'terrainMesh';
+    mesh.receiveShadow = true;
+    this.meshesGroup.add(mesh);
+
+    // 地形範圍外的大平面（遠景，被霧遮住）
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(4000, 4000),
+      new THREE.MeshStandardMaterial({ color: this.theme.ground, roughness: 1 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.3;
+    this.meshesGroup.add(floor);
+  }
+
+  // 特殊路段外觀：流沙（沙色路面＋路邊沙堆）、結冰（半透明亮藍冰面＋路邊雪堆）、隧道
+  _buildZoneOverlays() {
+    const halfW = this.width / 2;
+    const styles = {
+      sand: { color: 0xd8a25e, opacity: 0.9, roughness: 1, metalness: 0, pile: 0xe2b26c },
+      ice: { color: 0xbfe9ff, opacity: 0.72, roughness: 0.08, metalness: 0.35, pile: 0xf4f8ff },
+    };
+
+    for (const zone of this.zones) {
+      if (zone.type === 'tunnel') {
+        this._buildTunnel(zone);
+        continue;
+      }
+      const style = styles[zone.type];
+      if (!style) continue;
+
+      // 路面覆蓋層（比路面高一點點，低於中線）
+      const positions = [];
+      const indices = [];
+      const idxList = this._zoneIndices(zone);
+      idxList.forEach((idx, k) => {
+        const sm = this.sampleAt(idx);
+        // 邊緣做成鋸齒狀，看起來像沙堆 / 冰面自然蔓延到路上
+        const jag = 0.85 + 0.15 * Math.sin(idx * 1.7);
+        const y = sm.height + 0.012;
+        positions.push(sm.point.x - halfW * jag * sm.normal.x, y, sm.point.z - halfW * jag * sm.normal.z);
+        positions.push(sm.point.x + halfW * jag * sm.normal.x, y, sm.point.z + halfW * jag * sm.normal.z);
+        if (k < idxList.length - 1) {
+          const v = k * 2;
+          indices.push(v, v + 1, v + 2);
+          indices.push(v + 1, v + 3, v + 2);
+        }
+      });
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setIndex(indices);
+      geo.computeVertexNormals();
+      const mat = new THREE.MeshStandardMaterial({
+        color: style.color,
+        transparent: true,
+        opacity: style.opacity,
+        roughness: style.roughness,
+        metalness: style.metalness,
+      });
+      const overlay = new THREE.Mesh(geo, mat);
+      overlay.name = `${zone.type}Overlay`;
+      overlay.receiveShadow = true;
+      this.meshesGroup.add(overlay);
+
+      // 路肩上的沙堆 / 雪堆
+      const pileMat = new THREE.MeshStandardMaterial({ color: style.pile, roughness: 1, flatShading: true });
+      const pileGeo = new THREE.SphereGeometry(1.6, 7, 5);
+      for (let k = 0; k < idxList.length; k += 5) {
+        const sm = this.sampleAt(idxList[k]);
+        for (const side of [-1, 1]) {
+          const lat = side * (halfW + 1.2 + (k % 3));
+          const pile = new THREE.Mesh(pileGeo, pileMat);
+          pile.position.set(sm.point.x + lat * sm.normal.x, sm.height - 0.4, sm.point.z + lat * sm.normal.z);
+          pile.scale.set(1 + (k % 4) * 0.2, 0.45, 1.3);
+          this.meshesGroup.add(pile);
+        }
+      }
+    }
+  }
+
+  // 隧道：沿賽道建立半圓拱頂（雙面材質）、出入口石框與天花板燈
+  _buildTunnel(zone) {
+    const idxList = this._zoneIndices(zone);
+    const R = this.width / 2 + this.shoulder + 0.8;
+    const squash = 0.72;
+    const K = 12;
+    const positions = [];
+    const indices = [];
+    idxList.forEach((idx, k) => {
+      const sm = this.sampleAt(idx);
+      for (let j = 0; j <= K; j++) {
+        const a = (j / K) * Math.PI;
+        positions.push(
+          sm.point.x + Math.cos(a) * R * sm.normal.x,
+          sm.height + Math.sin(a) * R * squash,
+          sm.point.z + Math.cos(a) * R * sm.normal.z
+        );
+      }
+      if (k < idxList.length - 1) {
+        for (let j = 0; j < K; j++) {
+          const v = k * (K + 1) + j;
+          indices.push(v, v + K + 1, v + 1);
+          indices.push(v + 1, v + K + 1, v + K + 2);
+        }
+      }
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    const tunnel = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+      color: 0x6f7480, roughness: 0.95, flatShading: true, side: THREE.DoubleSide,
+    }));
+    tunnel.name = 'tunnelMesh';
+    tunnel.castShadow = true;
+    tunnel.receiveShadow = true;
+    this.meshesGroup.add(tunnel);
+
+    // 出入口石框（半圓環）
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x4b4f58, roughness: 1, flatShading: true });
+    for (const idx of [idxList[0], idxList[idxList.length - 1]]) {
+      const sm = this.sampleAt(idx);
+      const frame = new THREE.Mesh(new THREE.TorusGeometry(R, 1.4, 6, 14, Math.PI), frameMat);
+      frame.scale.set(1, squash, 1);
+      frame.position.set(sm.point.x, sm.height, sm.point.z);
+      frame.rotation.y = Math.atan2(sm.tangent.x, sm.tangent.z) + Math.PI / 2;
+      frame.castShadow = true;
+      this.meshesGroup.add(frame);
+    }
+
+    // 天花板燈（自發光小燈條）
+    const lampMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+    const lampGeo = new THREE.BoxGeometry(0.6, 0.15, 2.4);
+    for (let k = 4; k < idxList.length - 4; k += 8) {
+      const sm = this.sampleAt(idxList[k]);
+      const lamp = new THREE.Mesh(lampGeo, lampMat);
+      lamp.position.set(sm.point.x, sm.height + R * squash - 0.3, sm.point.z);
+      lamp.rotation.y = Math.atan2(sm.tangent.x, sm.tangent.z);
+      this.meshesGroup.add(lamp);
+    }
+  }
+
+  // 在賽道外的空地上找擺放點（離任何路段都夠遠），回傳 { x, z } 陣列
+  // 使用固定種子的亂數，讓每次載入同一張地圖的景物位置都一樣
+  _scatterPoints(count, minClear, spread) {
+    let seed = 12345;
+    const rand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return seed / 2147483647;
+    };
+    const result = [];
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of this.points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    for (let tries = 0; tries < count * 8 && result.length < count; tries++) {
+      const x = lerp(minX - spread, maxX + spread, rand());
+      const z = lerp(minZ - spread, maxZ + spread, rand());
+      const proj = this.project(x, z);
+      if (Math.abs(proj.lateral) < minClear) continue;
+      result.push({ x, z, r: rand() });
+    }
+    return result;
+  }
+
+  // 沙漠地圖：程式生成紅色岩柱（台地）與仙人掌
+  _buildMesas() {
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0xb5562b, roughness: 1, flatShading: true });
+    const rockTopMat = new THREE.MeshStandardMaterial({ color: 0xd9824a, roughness: 1, flatShading: true });
+    for (const p of this._scatterPoints(26, 45, 140)) {
+      const radius = 10 + p.r * 22;
+      const height = 18 + p.r * 40;
+      const geo = new THREE.CylinderGeometry(radius * 0.75, radius, height, 7);
+      const mesa = new THREE.Mesh(geo, p.r > 0.5 ? rockMat : rockTopMat);
+      mesa.position.set(p.x, this.terrainHeight(p.x, p.z) + height / 2 - 2, p.z);
+      mesa.rotation.y = p.r * Math.PI * 2;
+      mesa.castShadow = height > 40;
+      this.meshesGroup.add(mesa);
+    }
+
+    const cactusMat = new THREE.MeshStandardMaterial({ color: 0x3c8d2f, roughness: 0.8 });
+    const trunkGeo = new THREE.CylinderGeometry(0.6, 0.7, 6, 8);
+    const armGeo = new THREE.CylinderGeometry(0.4, 0.45, 2.6, 8);
+    for (const p of this._scatterPoints(60, 18, 40)) {
+      const cactus = new THREE.Group();
+      const trunk = new THREE.Mesh(trunkGeo, cactusMat);
+      trunk.position.y = 3;
+      cactus.add(trunk);
+      for (const side of [-1, 1]) {
+        const arm = new THREE.Mesh(armGeo, cactusMat);
+        arm.position.set(side * 1.1, 3 + p.r * 1.5 + (side > 0 ? 0.6 : 0), 0);
+        cactus.add(arm);
+      }
+      const s = 0.8 + p.r * 0.8;
+      cactus.scale.set(s, s, s);
+      cactus.position.set(p.x, this.terrainHeight(p.x, p.z) - 0.2, p.z);
+      cactus.rotation.y = p.r * Math.PI * 2;
+      this.meshesGroup.add(cactus);
+    }
+  }
+
+  // 雪地地圖：程式生成積雪松樹（雪山由地形負責）
+  _buildPines() {
+    const leafMat = new THREE.MeshStandardMaterial({ color: 0x1f5e45, roughness: 0.9, flatShading: true });
+    const snowMat = new THREE.MeshStandardMaterial({ color: 0xf4f8ff, roughness: 0.9, flatShading: true });
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5a3d2b, roughness: 1 });
+    const trunkGeo = new THREE.CylinderGeometry(0.5, 0.6, 2.4, 6);
+    const coneGeos = [
+      new THREE.ConeGeometry(4.2, 5.5, 7),
+      new THREE.ConeGeometry(3.2, 4.5, 7),
+      new THREE.ConeGeometry(2.0, 3.6, 7),
+    ];
+    const capGeo = new THREE.ConeGeometry(1.3, 2.2, 7);
+
+    for (const p of this._scatterPoints(90, 17, 50)) {
+      const tree = new THREE.Group();
+      const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+      trunk.position.y = 1.2;
+      tree.add(trunk);
+      coneGeos.forEach((geo, k) => {
+        const cone = new THREE.Mesh(geo, leafMat);
+        cone.position.y = 3.8 + k * 2.6;
+        tree.add(cone);
+      });
+      const cap = new THREE.Mesh(capGeo, snowMat);
+      cap.position.y = 10.6;
+      tree.add(cap);
+      const s = 1.0 + p.r * 0.9;
+      tree.scale.set(s, s, s);
+      tree.position.set(p.x, this.terrainHeight(p.x, p.z) - 0.2, p.z);
+      tree.traverse((node) => { if (node.isMesh) node.castShadow = p.r > 0.6; });
+      this.meshesGroup.add(tree);
+    }
+  }
+
+  // 飄雪粒子：在賽道範圍內隨機散布雪花，updateWeather 每幀讓它們往下飄
+  _buildSnowfall() {
+    const count = 6000;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of this.points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
+    }
+    const positions = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = lerp(minX - 40, maxX + 40, Math.random());
+      positions[i * 3 + 1] = Math.random() * 60;
+      positions[i * 3 + 2] = lerp(minZ - 40, maxZ + 40, Math.random());
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.45,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+    });
+    this.weatherPoints = new THREE.Points(geo, mat);
+    this.weatherPoints.frustumCulled = false;
+    this.weatherTime = 0;
+    this.meshesGroup.add(this.weatherPoints);
+  }
+
+  // 每幀更新天氣粒子（雪花往下飄、左右搖擺，掉到地面就回到上方）
+  updateWeather(dt) {
+    if (!this.weatherPoints) return;
+    this.weatherTime += dt;
+    const attr = this.weatherPoints.geometry.attributes.position;
+    const arr = attr.array;
+    for (let i = 0; i < arr.length; i += 3) {
+      arr[i + 1] -= (5 + (i % 7)) * dt;
+      arr[i] += Math.sin(this.weatherTime * 0.8 + i) * 1.2 * dt;
+      if (arr[i + 1] < 0) arr[i + 1] += 60;
+    }
+    attr.needsUpdate = true;
+  }
+
+  // 清除 3D 物件並釋放這條賽道建立的幾何體與材質（換地圖時呼叫）
   detachView() {
     if (this.meshesGroup && this.meshesGroup.parent) {
       this.meshesGroup.parent.remove(this.meshesGroup);
     }
+    if (this.meshesGroup) {
+      // Kenney 模型是從 assets 範本複製出來的（共用幾何體與材質），標記 fromAsset 的不可釋放
+      for (const child of this.meshesGroup.children) {
+        if (child.userData.fromAsset) continue;
+        child.traverse((node) => {
+          node.geometry?.dispose?.();
+          const mats = Array.isArray(node.material) ? node.material : (node.material ? [node.material] : []);
+          for (const mat of mats) {
+            mat.map?.dispose?.();
+            mat.dispose?.();
+          }
+        });
+      }
+    }
+    this.meshesGroup = null;
+    this.weatherPoints = null;
   }
 }

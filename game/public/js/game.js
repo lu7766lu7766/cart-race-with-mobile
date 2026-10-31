@@ -7,7 +7,8 @@
 //  本類別無 DOM 依賴，可在 Node.js 環境中進行無頭（headless）測試。
 // ============================================================
 
-import { CONFIG, KARTS, AI_NAMES } from './config.js';
+import { CONFIG, KARTS, AI_NAMES, PAINTS, DEFAULT_PAINTS, DRIVERS, DIFFICULTIES, DEFAULT_DIFFICULTY } from './config.js';
+import { MAPS, getMap, DEFAULT_MAP_ID } from './maps.js';
 import { clamp, Emitter } from './utils.js';
 import { Track } from './track.js';
 import { Car } from './car.js';
@@ -16,12 +17,17 @@ import { AIInput } from './ai.js';
 import { NullInput } from './input.js';
 
 export class Game extends Emitter {
-  constructor({ headless = false, rng = Math.random } = {}) {
+  constructor({ headless = false, rng = Math.random, mapId = DEFAULT_MAP_ID, difficulty = DEFAULT_DIFFICULTY } = {}) {
     super();
     this.headless = headless;
     this.rng = rng;
 
-    this.track = new Track();
+    // 難度（大廳可切換，見 setDifficulty；影響電腦對手）
+    this.difficulty = DIFFICULTIES.some((d) => d.id === difficulty) ? difficulty : DEFAULT_DIFFICULTY;
+
+    // 目前選擇的地圖（大廳可切換，見 setMap）
+    this.mapId = getMap(mapId).id;
+    this.track = new Track(this.mapId);
     this.itemSystem = new ItemSystem({ game: this, track: this.track, rng: this.rng });
 
     // 真人玩家列表（keyboard 或 remote）
@@ -248,7 +254,7 @@ export class Game extends Emitter {
               if (hitSuccess) {
                 this.collisionCooldowns.set(hitKey, 0.5);
                 this.emit('playerHit', { player: racerB, by: racerA.id });
-                this.emit('sound', { type: 'spin' });
+                this.emit('sound', { type: 'spin', player: racerB });
               }
             }
           }
@@ -260,7 +266,7 @@ export class Game extends Emitter {
               if (hitSuccess) {
                 this.collisionCooldowns.set(hitKey, 0.5);
                 this.emit('playerHit', { player: racerA, by: racerB.id });
-                this.emit('sound', { type: 'spin' });
+                this.emit('sound', { type: 'spin', player: racerA });
               }
             }
           }
@@ -278,7 +284,7 @@ export class Game extends Emitter {
             carA.speed *= 0.85;
             carB.speed *= 0.85;
             this.collisionCooldowns.set(pairKey, 0.3);
-            this.emit('sound', { type: 'bump' });
+            this.emit('sound', { type: 'bump', players: [racerA, racerB], speed: Math.abs(approachSpeed) });
           }
         }
       }
@@ -314,7 +320,7 @@ export class Game extends Emitter {
 
         if (car.lapsDone < CONFIG.LAPS) {
           this.emit('lapChanged', { player: racer, lap: car.lapsDone + 1 });
-          this.emit('sound', { type: 'lap' });
+          this.emit('sound', { type: car.lapsDone + 1 === CONFIG.LAPS ? 'final_lap' : 'lap', player: racer });
         } else {
           car.finished = true;
           car.finishTime = this.raceTime;
@@ -335,7 +341,7 @@ export class Game extends Emitter {
             rank: racer.rank,
             time: car.finishTime,
           });
-          this.emit('sound', { type: 'finished' });
+          this.emit('sound', { type: 'finished', player: racer });
         }
       }
     }
@@ -427,16 +433,22 @@ export class Game extends Emitter {
       slot++;
     }
 
-    const kartInfo = KARTS[slot] || KARTS[0];
     const playerId = 'p_' + this.nextPlayerId++;
     const inRace = (this._state === 'lobby');
+
+    // 造型預設值：角色 = 欄位對應角色，烤漆 = 角色預設色（若已被其他玩家選走就挑第一個空的顏色）
+    const kart = slot % KARTS.length;
+    const paint = this._pickFreePaint(DEFAULT_PAINTS[kart] ?? 0, playerId);
 
     const player = {
       id: playerId,
       name: name || `玩家${slot + 1}`,
       kind,
       slot,
-      color: kartInfo.color,
+      kart,
+      driver: KARTS[kart].driver ?? 0,
+      paint,
+      color: PAINTS[paint].hex,
       input: input || new NullInput(),
       autoInput: null,
       car: null,
@@ -506,6 +518,7 @@ export class Game extends Emitter {
         color: p.color,
         state: this._state,
         inRace: false,
+        ...this._lookStatus(p),
       };
     }
 
@@ -518,7 +531,187 @@ export class Game extends Emitter {
       color: p.color,
       state: this._state,
       inRace: true,
+      ...this._lookStatus(p),
     };
+  }
+
+  // 大廳名單：4 個欄位各自的造型（真人用自己選的；空位顯示電腦會用的角色與避開真人的顏色）
+  // 電腦先保留自己的預設顏色；只有預設色被真人選走的電腦才改用其他沒人用的顏色
+  getLobbyRoster() {
+    const humans = new Map(this.getPlayers().map((h) => [h.slot, h]));
+    const used = new Set([...humans.values()].map((h) => h.paint));
+    const roster = [];
+    const displaced = [];
+
+    for (let slot = 0; slot < CONFIG.MAX_PLAYERS; slot++) {
+      const human = humans.get(slot) || null;
+      if (human) {
+        roster.push({ slot, human, kart: human.kart, driver: human.driver, paint: human.paint, color: human.color, name: human.name });
+        continue;
+      }
+      const kart = slot % KARTS.length;
+      const entry = { slot, human: null, kart, driver: KARTS[kart].driver ?? 0, paint: null, color: null, name: AI_NAMES[slot] || `電腦${slot + 1}` };
+      const preferred = DEFAULT_PAINTS[kart] ?? 0;
+      if (!used.has(preferred)) {
+        entry.paint = preferred;
+        used.add(preferred);
+      } else {
+        displaced.push(entry);
+      }
+      roster.push(entry);
+    }
+
+    // 被搶走預設色的電腦：從「沒有任何人使用」的顏色中挑
+    for (const entry of displaced) {
+      entry.paint = this._pickFreePaint(0, null, used);
+      used.add(entry.paint);
+    }
+    for (const entry of roster) {
+      if (!entry.human) entry.color = PAINTS[entry.paint].hex;
+    }
+    return roster;
+  }
+
+  // 造型與地圖資訊（給手機顯示造型選擇面板）：自己的角色、烤漆，以及被其他真人選走的烤漆
+  _lookStatus(p) {
+    const takenPaints = [];
+    for (const other of this.players.values()) {
+      if (other.id !== p.id && Number.isInteger(other.paint)) takenPaints.push(other.paint);
+    }
+    const map = getMap(this.mapId);
+    return {
+      kart: p.kart ?? p.slot,
+      driver: p.driver ?? 0,
+      paint: p.paint ?? 0,
+      takenPaints,
+      mapId: map.id,
+      mapName: map.name,
+      difficulty: this.difficulty,
+      difficultyName: (DIFFICULTIES.find((d) => d.id === this.difficulty) || {}).name,
+    };
+  }
+
+  // ------------------------------------------------------------
+  // 地圖選擇（只能在大廳切換）
+  // ------------------------------------------------------------
+  setMap(mapId) {
+    if (this._state !== 'lobby' && this._state !== 'loading') return false;
+    const map = MAPS.find((m) => m.id === mapId);
+    if (!map || map.id === this.mapId) return false;
+
+    this.mapId = map.id;
+    this.track = new Track(map.id);
+    this.itemSystem.setTrack(this.track);
+    this.emit('mapChanged', { mapId: map.id, map });
+    return true;
+  }
+
+  // ------------------------------------------------------------
+  // 難度選擇（只能在大廳切換）
+  // ------------------------------------------------------------
+  setDifficulty(id) {
+    if (this._state !== 'lobby' && this._state !== 'loading') return false;
+    if (id === this.difficulty || !DIFFICULTIES.some((d) => d.id === id)) return false;
+    this.difficulty = id;
+    this.emit('difficultyChanged', { difficulty: id });
+    return true;
+  }
+
+  cycleDifficulty(delta = 1) {
+    const idx = DIFFICULTIES.findIndex((d) => d.id === this.difficulty);
+    const next = DIFFICULTIES[(idx + delta + DIFFICULTIES.length) % DIFFICULTIES.length];
+    return this.setDifficulty(next.id);
+  }
+
+  // 依目前地圖往前/往後切換（delta = +1 或 -1）
+  cycleMap(delta = 1) {
+    const idx = MAPS.findIndex((m) => m.id === this.mapId);
+    const next = MAPS[(idx + delta + MAPS.length) % MAPS.length];
+    return this.setMap(next.id);
+  }
+
+  // ------------------------------------------------------------
+  // 造型選擇（角色車款 kart ＋ 烤漆顏色 paint，只能在大廳更換）
+  // ------------------------------------------------------------
+
+  // 烤漆是否已被其他真人玩家選走
+  _isPaintTaken(paint, exceptPlayerId = null) {
+    for (const p of this.players.values()) {
+      if (p.id !== exceptPlayerId && p.paint === paint) return true;
+    }
+    return false;
+  }
+
+  // 從 preferred 開始往後找第一個沒被選走的烤漆（extraUsed 為額外要避開的顏色集合）
+  _pickFreePaint(preferred, exceptPlayerId = null, extraUsed = null) {
+    for (let k = 0; k < PAINTS.length; k++) {
+      const paint = (preferred + k) % PAINTS.length;
+      if (this._isPaintTaken(paint, exceptPlayerId)) continue;
+      if (extraUsed && extraUsed.has(paint)) continue;
+      return paint;
+    }
+    return preferred % PAINTS.length;
+  }
+
+  // 設定玩家造型：kart 為 KARTS 索引（決定車款模型與角色能力）、driver 為 DRIVERS 索引（車手外觀）、
+  // paint 為 PAINTS 索引。換角色但沒指定車手時，車手會跟著換成該角色的預設車手。
+  // 不合法或已被別人選走的烤漆會被忽略；有任何改變時回傳 true 並發出 playerLookChanged
+  setPlayerLook(playerId, { kart, driver, paint } = {}) {
+    if (this._state !== 'lobby') return false;
+    const player = this.players.get(playerId);
+    if (!player) return false;
+
+    let changed = false;
+    const validDriver = Number.isInteger(driver) && driver >= 0 && driver < DRIVERS.length;
+    if (Number.isInteger(kart) && kart >= 0 && kart < KARTS.length && kart !== player.kart) {
+      player.kart = kart;
+      if (!validDriver) player.driver = KARTS[kart].driver ?? player.driver;
+      changed = true;
+    }
+    if (validDriver && driver !== player.driver) {
+      player.driver = driver;
+      changed = true;
+    }
+    if (Number.isInteger(paint) && paint >= 0 && paint < PAINTS.length && paint !== player.paint
+        && !this._isPaintTaken(paint, playerId)) {
+      player.paint = paint;
+      player.color = PAINTS[paint].hex;
+      changed = true;
+    }
+
+    if (changed) {
+      this.emit('playerLookChanged', { player });
+    }
+    return changed;
+  }
+
+  // 鍵盤玩家用：切換到上一個/下一個角色
+  cyclePlayerKart(playerId, delta = 1) {
+    const player = this.players.get(playerId);
+    if (!player) return false;
+    const kart = ((player.kart ?? 0) + delta + KARTS.length) % KARTS.length;
+    return this.setPlayerLook(playerId, { kart });
+  }
+
+  // 鍵盤玩家用：切換到上一個/下一個車手
+  cyclePlayerDriver(playerId, delta = 1) {
+    const player = this.players.get(playerId);
+    if (!player) return false;
+    const driver = ((player.driver ?? 0) + delta + DRIVERS.length) % DRIVERS.length;
+    return this.setPlayerLook(playerId, { driver });
+  }
+
+  // 鍵盤玩家用：切換到下一個沒被選走的烤漆
+  cyclePlayerPaint(playerId, delta = 1) {
+    const player = this.players.get(playerId);
+    if (!player) return false;
+    for (let k = 1; k < PAINTS.length; k++) {
+      const paint = ((player.paint ?? 0) + delta * k + PAINTS.length * k) % PAINTS.length;
+      if (!this._isPaintTaken(paint, playerId)) {
+        return this.setPlayerLook(playerId, { paint });
+      }
+    }
+    return false;
   }
 
   // 素材載入完成後從 loading 進入 lobby
@@ -549,18 +742,19 @@ export class Game extends Emitter {
       this.racers.push(human);
     }
 
-    // 2. 空位由 AI 補滿 4 台
-    const occupiedSlots = new Set(humanList.map((h) => h.slot));
-    for (let slot = 0; slot < CONFIG.MAX_PLAYERS; slot++) {
-      if (!occupiedSlots.has(slot)) {
-        const kartInfo = KARTS[slot] || KARTS[0];
-        const aiName = AI_NAMES[slot] || `電腦${slot + 1}`;
+    // 2. 空位由 AI 補滿 4 台（造型與大廳預覽 getLobbyRoster 一致）
+    for (const entry of this.getLobbyRoster()) {
+      if (!entry.human) {
+        const { slot, kart, driver, paint, name: aiName } = entry;
         const aiPlayer = {
           id: `ai_${slot}`,
           name: aiName,
           kind: 'ai',
           slot,
-          color: kartInfo.color,
+          kart,
+          driver,
+          paint,
+          color: PAINTS[paint].hex,
           input: null,
           autoInput: null,
           car: null,
@@ -583,14 +777,17 @@ export class Game extends Emitter {
     for (const racer of this.racers) {
       racer.car = new Car({
         slot: racer.slot,
+        kart: racer.kart ?? racer.slot,
+        driver: racer.driver,
         track: this.track,
         player: racer,
         onEvent: (name, data) => {
           this.emit(name, { player: racer, ...data });
-          if (name === 'miniTurbo') this.emit('sound', { type: 'mini_turbo', level: data?.level || 1 });
-          else if (name === 'jumped') this.emit('sound', { type: 'jump' });
-          else if (name === 'landed') this.emit('sound', { type: 'land' });
-          else if (name === 'wallHit') this.emit('sound', { type: 'wall' });
+          // 音效事件附上 player，讓音效系統分辨是真人還是電腦（電腦的音效較小聲）
+          if (name === 'miniTurbo') this.emit('sound', { type: 'mini_turbo', level: data?.level || 1, player: racer });
+          else if (name === 'jumped') this.emit('sound', { type: 'jump', player: racer });
+          else if (name === 'landed') this.emit('sound', { type: 'land', player: racer });
+          else if (name === 'wallHit') this.emit('sound', { type: 'wall', player: racer, speed: Math.abs(racer.car?.speed || 0) });
         },
       });
 

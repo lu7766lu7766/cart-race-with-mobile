@@ -15,7 +15,7 @@ export const CONFIG = {
   TRACK_WIDTH: 16,          // 路面寬度
   SHOULDER: 4,              // 路面外的草地寬度（開上去會變慢）
   TRACK_SAMPLES: 900,       // 賽道切成幾個點來計算（加長賽道至 1200~1500）
-  TRACK_MAX_HEIGHT: 10,     // 賽道最高起伏高度
+  TRACK_MAX_HEIGHT: 16,     // 賽道最高起伏高度（沙漠高原 16 米）
   GRAVITY: 40,              // 重力加速度
 
   // ---------- 車輛基礎物理 ----------
@@ -97,10 +97,23 @@ export const CONFIG = {
   AI_SPEED_MAX: 0.96,       // AI 最高速是玩家的幾成（最高）
 };
 
+// 難度（大廳按 Q 或點選切換）：調整電腦對手
+//   aiSpeed：電腦最高速是玩家的幾成（每台在範圍內隨機）
+//   itemDelay：電腦拿到道具後等幾秒才用（秒，範圍內隨機）
+//   catchUp：電腦落後真人玩家超過 1/6 圈時，額外增加的速度比例（追趕機制）
+export const DIFFICULTIES = [
+  { id: 'easy',   name: '簡單', emoji: '🙂', desc: '電腦開得比較慢，也比較少用道具', aiSpeed: [0.80, 0.86], itemDelay: [2.0, 4.0], catchUp: 0 },
+  { id: 'normal', name: '普通', emoji: '😎', desc: '標準對手', aiSpeed: [0.92, 0.96], itemDelay: [0.5, 2.0], catchUp: 0 },
+  { id: 'hard',   name: '困難', emoji: '🔥', desc: '電腦跑得和你一樣快、落後會追趕、道具馬上用', aiSpeed: [0.99, 1.03], itemDelay: [0.1, 0.6], catchUp: 0.06 },
+];
+export const DEFAULT_DIFFICULTY = 'normal';
+
 // 四款卡丁車與角色被動能力（依玩家欄位 0~3 分配）
 export const KARTS = [
   {
     file: 'kart-oobi.glb',
+    driver: 0,             // 預設車手（DRIVERS 索引）
+    emoji: '🚀',
     color: '#2ecc71',
     colorName: '綠',
     character: '衝刺手',
@@ -120,6 +133,8 @@ export const KARTS = [
   },
   {
     file: 'kart-oodi.glb',
+    driver: 1,             // 預設車手（DRIVERS 索引）
+    emoji: '⚡',
     color: '#a66bff',
     colorName: '紫',
     character: '極速王',
@@ -139,6 +154,8 @@ export const KARTS = [
   },
   {
     file: 'kart-ooli.glb',
+    driver: 2,             // 預設車手（DRIVERS 索引）
+    emoji: '🌀',
     color: '#ff5c8a',
     colorName: '粉',
     character: '甩尾高手',
@@ -158,6 +175,8 @@ export const KARTS = [
   },
   {
     file: 'kart-oopi.glb',
+    driver: 3,             // 預設車手（DRIVERS 索引）
+    emoji: '🛡️',
     color: '#ffa41b',
     colorName: '橘',
     character: '重戰車',
@@ -177,6 +196,36 @@ export const KARTS = [
   },
 ];
 
+// 車身烤漆顏色（造型選擇用）：前 4 色是四位角色的預設顏色
+// 同一場比賽中每台車的顏色不重複，方便在小地圖與分割畫面認出自己
+export const PAINTS = [
+  { hex: '#2ecc71', name: '綠' },
+  { hex: '#a66bff', name: '紫' },
+  { hex: '#ff5c8a', name: '粉' },
+  { hex: '#ffa41b', name: '橘' },
+  { hex: '#3498db', name: '藍' },
+  { hex: '#e74c3c', name: '紅' },
+  { hex: '#f1c40f', name: '黃' },
+  { hex: '#f5f6fa', name: '白' },
+];
+
+// 車手造型（只影響外觀）：由 kartLook.js 用簡單幾何形狀組出人物
+// 換角色車款時會自動換成該角色的預設車手（KARTS[i].driver），也可以另外挑
+// 車手的衣服顏色會跟著烤漆顏色變化
+export const DRIVERS = [
+  { id: 'racer',     name: '小勇', emoji: '🏎️', title: '賽車手', desc: '全罩安全帽＋護目鏡' },
+  { id: 'astronaut', name: '阿波', emoji: '🧑‍🚀', title: '太空人', desc: '玻璃頭罩＋天線' },
+  { id: 'ninja',     name: '小影', emoji: '🥷', title: '忍者',   desc: '蒙面頭巾＋飄帶' },
+  { id: 'robot',     name: '鐵鐵', emoji: '🤖', title: '機器人', desc: '方頭＋發光眼睛' },
+  { id: 'cowboy',    name: '阿德', emoji: '🤠', title: '牛仔',   desc: '牛仔帽＋領巾' },
+  { id: 'bunny',     name: '咪咪', emoji: '🐰', title: '兔兔',   desc: '長耳朵＋粉紅鼻' },
+  { id: 'princess',  name: '莉莉', emoji: '👑', title: '公主',   desc: '皇冠＋長髮' },
+  { id: 'dino',      name: '小暴', emoji: '🦖', title: '恐龍',   desc: '恐龍頭套＋背刺' },
+];
+
+// 每位角色的預設烤漆（對應 PAINTS 索引）
+export const DEFAULT_PAINTS = [0, 1, 2, 3];
+
 // 鍵盤配置：支援甩尾按鍵
 export const KEYBOARD_LAYOUTS = [
   {
@@ -186,6 +235,8 @@ export const KEYBOARD_LAYOUTS = [
     drift: ['ShiftRight'],
     item: ['Enter', 'NumpadEnter'],
     help: '↑ 加速　↓ 倒退　← → 轉向　右Shift 甩尾　Enter 道具',
+    lobbyKart: { prev: ['ArrowLeft'], next: ['ArrowRight'] }, // 大廳換角色
+    lobbyPaint: ['ShiftRight'],                                // 大廳換顏色
   },
   {
     id: 'wasd',
@@ -194,6 +245,8 @@ export const KEYBOARD_LAYOUTS = [
     drift: ['ShiftLeft'],
     item: ['Space'],
     help: 'W 加速　S 倒退　A D 轉向　左Shift 甩尾　空白鍵 道具',
+    lobbyKart: { prev: ['KeyA'], next: ['KeyD'] },
+    lobbyPaint: ['ShiftLeft'],
   },
 ];
 

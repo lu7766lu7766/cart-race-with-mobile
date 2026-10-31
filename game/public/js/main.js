@@ -2,12 +2,15 @@
 //  main.js — 遊戲主程式啟動與主迴圈
 //  負責初始化 Three.js 場景、固定範圍全局日光陰影相機、
 //  陸行鳥大賽車風格分割畫面追尾相機（ChaseCamera）與全場相機（OverviewCamera）、
-//  資產載入進度、建立遊戲核心 Game 實例、掛載 HUD 與 WebAudio 音效，
+//  資產載入進度、建立遊戲核心 Game 實例、掛載 HUD 與 WebAudio 音效（引擎、技能、配樂），
+//  大廳地圖切換（換賽道、天空、燈光）與卡丁車造型 3D 預覽，
 //  並以 requestAnimationFrame 驅動畫面渲染（setScissorTest / setViewport / setScissor）。
 // ============================================================
 
 import * as THREE from 'three';
 import { CONFIG, KEYBOARD_LAYOUTS } from './config.js';
+import { MAPS } from './maps.js';
+import { Car } from './car.js';
 import { Game } from './game.js';
 import { AssetManager } from './assets.js';
 import { ChaseCamera, OverviewCamera, getViewportRects } from './camera.js';
@@ -55,28 +58,40 @@ async function bootstrap() {
   const game = new Game();
   window.game = game;
 
-  // 依賽道包圍盒配置陰影相機
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-  for (const p of game.track.points) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.z < minZ) minZ = p.z;
-    if (p.z > maxZ) maxZ = p.z;
-  }
-  const midX = (minX + maxX) / 2;
-  const midZ = (minZ + maxZ) / 2;
-  const span = Math.max((maxX - minX) / 2, (maxZ - minZ) / 2) + 25;
+  // 依地圖主題設定天空、霧、燈光，並依賽道包圍盒配置陰影相機（換地圖時會再呼叫一次）
+  function applyMapTheme(track) {
+    const theme = track.theme;
+    scene.background = new THREE.Color(theme.sky);
+    defaultFog.color.set(theme.sky);
+    defaultFog.density = theme.fogDensity;
+    ambientLight.color.set(theme.ambient.color);
+    ambientLight.intensity = theme.ambient.intensity;
+    sunLight.color.set(theme.sun.color);
+    sunLight.intensity = theme.sun.intensity;
 
-  sunLight.position.set(midX + 60, 240, midZ + 60);
-  sunLight.target.position.set(midX, 0, midZ);
-  sunLight.target.updateMatrixWorld();
-  sunLight.shadow.camera.left = -span;
-  sunLight.shadow.camera.right = span;
-  sunLight.shadow.camera.top = span;
-  sunLight.shadow.camera.bottom = -span;
-  sunLight.shadow.camera.near = 20;
-  sunLight.shadow.camera.far = 500;
-  sunLight.shadow.camera.updateProjectionMatrix();
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of track.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+    }
+    const midX = (minX + maxX) / 2;
+    const midZ = (minZ + maxZ) / 2;
+    const span = Math.max((maxX - minX) / 2, (maxZ - minZ) / 2) + 25;
+
+    sunLight.position.set(midX + 60, 240, midZ + 60);
+    sunLight.target.position.set(midX, 0, midZ);
+    sunLight.target.updateMatrixWorld();
+    sunLight.shadow.camera.left = -span;
+    sunLight.shadow.camera.right = span;
+    sunLight.shadow.camera.top = span;
+    sunLight.shadow.camera.bottom = -span;
+    sunLight.shadow.camera.near = 20;
+    sunLight.shadow.camera.far = 500;
+    sunLight.shadow.camera.updateProjectionMatrix();
+  }
+  applyMapTheme(game.track);
 
   // 5. 載入 3D 模型素材
   const assets = new AssetManager();
@@ -94,7 +109,8 @@ async function bootstrap() {
   }
 
   // 建立賽道路面、跳台與裝飾網格
-  game.track.buildMeshes(scene, assets);
+  let builtTrack = game.track;
+  builtTrack.buildMeshes(scene, assets);
   game.itemSystem.attachView(scene, assets);
 
   // 素材載入完成，切換核心狀態至大廳
@@ -114,18 +130,161 @@ async function bootstrap() {
   const hud = new HUD(hudContainer, game);
   hud.setOverviewCamera(overviewCamera.camera);
   const audio = new SoundSystem();
+  window.sound = audio; // 方便在瀏覽器 Console 除錯（例如 sound.toggleMusic()）
+  audio.setMusic('lobby', game.mapId);
+  audio.onChange = () => hud.setAudioState({ muted: audio.muted, music: audio.musicEnabled });
+  hud.setAudioState({ muted: audio.muted, music: audio.musicEnabled });
+
+  // 依玩家在分割畫面的位置決定左右聲道（左邊畫面的玩家聲音偏左）
+  function panForRacer(racer) {
+    const viewRacers = game.viewRacers || [];
+    const idx = viewRacers.indexOf(racer);
+    if (idx < 0 || viewRacers.length < 2) return 0;
+    const rects = getViewportRects(viewRacers.length, window.innerWidth, window.innerHeight);
+    const rect = rects[idx];
+    if (!rect) return 0;
+    return ((rect.x + rect.w / 2) / window.innerWidth - 0.5) * 1.2;
+  }
+
+  // 只和個人有關的音效：電腦觸發時不播放（避免一直聽到別人的圈數、抽道具聲）
+  const PERSONAL_SOUNDS = new Set(['lap', 'final_lap', 'finished', 'box', 'upgrade', 'pad']);
 
   game.on('sound', (event) => {
     if (typeof event === 'string') {
       audio.play(event);
-    } else if (event && event.type) {
-      audio.play(event.type, event);
+      return;
+    }
+    if (!event || !event.type) return;
+
+    let volume = 1;
+    let pan = 0;
+    const involved = event.players || (event.player ? [event.player] : []);
+    if (involved.length > 0) {
+      const human = involved.find((r) => r && r.kind !== 'ai');
+      if (human) {
+        pan = panForRacer(human);
+      } else {
+        if (PERSONAL_SOUNDS.has(event.type)) return;
+        volume = 0.3; // 電腦玩家的技能與碰撞聲小聲一點
+      }
+    }
+    audio.play(event.type, { ...event, volume, pan });
+  });
+
+  // 逆向行駛警告音（只對真人）
+  game.on('wrongWay', ({ player }) => {
+    if (player && player.kind !== 'ai') audio.play('wrong_way', { pan: panForRacer(player) });
+  });
+
+  // 真人進入最後一圈：背景音樂加速
+  game.on('lapChanged', ({ player, lap }) => {
+    if (player && player.kind !== 'ai' && lap === CONFIG.LAPS && game.state === 'racing') {
+      audio.setMusic('final', game.mapId);
     }
   });
 
+  // ------------------------------------------------------------
+  // 大廳卡丁車造型預覽：在起跑格擺出 4 台車（真人選的造型＋電腦補位造型）
+  // ------------------------------------------------------------
+  let lobbyPreviewCars = [];
+  let lobbyPreviewKey = '';
+
+  function clearLobbyPreview() {
+    for (const car of lobbyPreviewCars) car.detachView();
+    lobbyPreviewCars = [];
+    lobbyPreviewKey = '';
+  }
+
+  function refreshLobbyPreview() {
+    if (game.state !== 'lobby') {
+      clearLobbyPreview();
+      return;
+    }
+    const roster = game.getLobbyRoster();
+    const key = game.mapId + '|' + roster.map((r) => `${r.slot}:${r.kart}:${r.driver}:${r.color}:${r.name}`).join(',');
+    if (key === lobbyPreviewKey) return;
+    clearLobbyPreview();
+    lobbyPreviewKey = key;
+    for (const entry of roster) {
+      const car = new Car({
+        slot: entry.slot,
+        kart: entry.kart,
+        driver: entry.driver,
+        track: game.track,
+        player: { name: entry.human ? entry.name : `🤖 ${entry.name}` },
+      });
+      car.attachView(scene, assets, entry.color);
+      car.syncView(0);
+      lobbyPreviewCars.push(car);
+    }
+  }
+
+  // 大廳鏡頭焦點：換地圖後高空環繞預覽整張地圖 7 秒；換造型後特寫那台車 4 秒
+  let lobbyFocus = null;
+  function lobbyFocusTarget() {
+    if (!lobbyFocus || performance.now() > lobbyFocus.until) {
+      lobbyFocus = null;
+      return null;
+    }
+    if (lobbyFocus.type === 'tour') return { type: 'tour' };
+    const car = lobbyPreviewCars.find((c) => c.slot === lobbyFocus.slot);
+    return car ? { type: 'kart', x: car.x, y: car.y, z: car.z, heading: car.heading } : null;
+  }
+
+  // 特寫時暫時隱藏那台車的號碼旗與名牌，避免擋住車手
+  function updatePreviewLabels(focus) {
+    for (const car of lobbyPreviewCars) {
+      const hide = Boolean(focus && focus.type === 'kart' && lobbyFocus && car.slot === lobbyFocus.slot);
+      if (car.flagGroup) car.flagGroup.visible = !hide;
+      if (car.nameSprite) car.nameSprite.visible = !hide;
+    }
+  }
+
+  // 換地圖：拆掉舊賽道、建立新賽道與主題、相機與小地圖改用新賽道、配樂換成新地圖
+  game.on('mapChanged', () => {
+    builtTrack.detachView();
+    builtTrack = game.track;
+    builtTrack.buildMeshes(scene, assets);
+    applyMapTheme(builtTrack);
+    chaseCameras.forEach((c) => { c.track = builtTrack; });
+    overviewCamera.setTrack(builtTrack);
+    hud.onMapChanged();
+    refreshLobbyPreview();
+    lobbyFocus = { type: 'tour', until: performance.now() + 7000 };
+    audio.setMusic('lobby', game.mapId);
+    audio.play('select');
+  });
+
+  game.on('playerJoined', refreshLobbyPreview);
+  game.on('playerLeft', refreshLobbyPreview);
+  game.on('playerLookChanged', ({ player }) => {
+    refreshLobbyPreview();
+    lobbyFocus = { type: 'kart', slot: player.slot, until: performance.now() + 4000 };
+    audio.play('select');
+  });
+
+  // HUD 大廳上的滑鼠點選（地圖卡片、造型切換按鈕）
+  hud.onMapSelect = (mapId) => game.setMap(mapId);
+  hud.onDifficultySelect = (id) => game.setDifficulty(id);
+  game.on('difficultyChanged', () => audio.play('select'));
+  hud.onLookAction = (playerId, action) => {
+    if (action === 'kartPrev') game.cyclePlayerKart(playerId, -1);
+    else if (action === 'kartNext') game.cyclePlayerKart(playerId, 1);
+    else if (action === 'paintNext') game.cyclePlayerPaint(playerId, 1);
+    else if (action === 'driverPrev') game.cyclePlayerDriver(playerId, -1);
+    else if (action === 'driverNext') game.cyclePlayerDriver(playerId, 1);
+  };
+
   // 8. 狀態切換時動態掛載/卸載車輛 3D 視覺
   game.on('stateChanged', ({ state }) => {
+    // 配樂：大廳輕鬆版 → 倒數靜音（只聽引擎催油門）→ 比賽 → 結算停止
+    if (state === 'lobby') audio.setMusic('lobby', game.mapId);
+    else if (state === 'racing') audio.setMusic('race', game.mapId);
+    else audio.setMusic('off', game.mapId);
+    if (state !== 'countdown' && state !== 'racing') audio.stopVehicles();
+
     if (state === 'countdown') {
+      clearLobbyPreview();
       chaseCameras.forEach((c) => c.reset());
       for (const racer of game.racers) {
         if (racer.car) {
@@ -139,6 +298,7 @@ async function bootstrap() {
         }
       }
       hud.clearLabels();
+      refreshLobbyPreview();
     }
   });
 
@@ -151,6 +311,30 @@ async function bootstrap() {
     const state = game.state;
 
     if (state === 'lobby') {
+      // 地圖選擇：數字鍵 1~N 直接選，Tab 切換下一張
+      const digit = /^Digit([1-9])$/.exec(e.code) || /^Numpad([1-9])$/.exec(e.code);
+      if (digit) {
+        const map = MAPS[Number(digit[1]) - 1];
+        if (map) game.setMap(map.id);
+      }
+      if (e.code === 'Tab') {
+        e.preventDefault();
+        game.cycleMap(e.shiftKey ? -1 : 1);
+      }
+      // 難度：Q 切換（簡單 → 普通 → 困難）
+      if (e.code === 'KeyQ') game.cycleDifficulty(1);
+
+      // 造型選擇：已加入的鍵盤玩家用自己的方向鍵切換角色、Shift 切換顏色
+      KEYBOARD_LAYOUTS.forEach((layout) => {
+        const p = keyboardPlayers.get(layout.id);
+        if (!p || !layout.lobbyKart) return;
+        if (layout.lobbyKart.prev.includes(e.code)) game.cyclePlayerKart(p.id, -1);
+        if (layout.lobbyKart.next.includes(e.code)) game.cyclePlayerKart(p.id, 1);
+        if (layout.lobbyPaint.includes(e.code)) game.cyclePlayerPaint(p.id, 1);
+        // 已經加入的玩家再按一次加入鍵（↑ / W）= 換車手
+        if (layout.up.includes(e.code)) game.cyclePlayerDriver(p.id, 1);
+      });
+
       // 玩家 1 加入（方向鍵配置）
       if (e.code === 'ArrowUp') {
         if (!keyboardPlayers.has('arrows')) {
@@ -269,16 +453,37 @@ async function bootstrap() {
     }
 
     game.itemSystem.syncView(realDt);
+    game.track.updateWeather?.(realDt);
+    if (game.state === 'lobby') {
+      refreshLobbyPreview();
+      for (const car of lobbyPreviewCars) car.syncView(realDt);
+    }
     hud.update();
 
-    // 檢查是否有任何真人的車正在甩尾播放摩擦聲（非比賽狀態一律 off）
-    if (game.state === 'racing') {
-      const anyHumanDrifting = game.racers.some(
-        (r) => r.kind !== 'ai' && r.car && r.car.isDrifting
-      );
-      audio.setDrifting(anyHumanDrifting);
-    } else {
-      audio.setDrifting(false);
+    // 車輛持續音（引擎、甩尾、煞車、草地）：每位上場真人一組，倒數時可以空踩油門催引擎
+    if (game.state === 'racing' || game.state === 'countdown') {
+      const countdown = game.state === 'countdown';
+      const list = [];
+      for (const racer of game.viewRacers || []) {
+        const car = racer.car;
+        if (!car) continue;
+        const maxSpeed = CONFIG.MAX_SPEED * (car.stats?.maxSpeedMult || 1);
+        list.push({
+          id: racer.id,
+          speed: car.speed,
+          speedRatio: Math.abs(car.speed) / maxSpeed,
+          throttle: countdown ? (racer.lastThrottle ?? 0) : car.throttleInput,
+          brake: car.brakeInput,
+          skidding: car.isDrifting || car.spinTimer > 0,
+          driftLevel: car.driftLevel,
+          offroad: car.isOffroad,
+          grounded: car.grounded,
+          boosting: car.boostTimer > 0,
+          revving: countdown,
+          pan: panForRacer(racer),
+        });
+      }
+      audio.updateVehicles(list);
     }
 
     // 6.1: 陰影每幀只更新一次
@@ -339,7 +544,10 @@ async function bootstrap() {
       renderer.setViewport(0, 0, W, H);
       overviewCamera.camera.aspect = W / H;
       overviewCamera.camera.updateProjectionMatrix();
-      overviewCamera.updateLobby(realDt);
+      // 寬螢幕時把展示焦點往右移，左側留給大廳選單
+      const focus = lobbyFocusTarget();
+      updatePreviewLabels(focus);
+      overviewCamera.updateLobby(realDt, W >= 1100 ? 0.2 : 0, focus);
       scene.fog = null;
       renderer.render(scene, overviewCamera.camera);
       scene.fog = defaultFog;

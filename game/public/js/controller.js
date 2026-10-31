@@ -3,8 +3,12 @@
 //  負責取得手機陀螺儀/重力感測權限、全螢幕與橫向鎖定、
 //  透過 WebSocket 連線伺服器並加入房間、以 30 Hz 發送即時轉向與按鍵輸入、
 //  接收大螢幕回傳的名次、圈數、道具等級（itemLevel）與震動受擊回饋。
-//  本檔案為純前端腳本，不載入 Three.js。
+//  大廳時顯示造型選擇面板，讓玩家選角色車款、車手與烤漆顏色（送出 { type:'customize', kart, driver, paint }），
+//  面板左側有 3D 旋轉預覽（lookPreview.js，動態載入 Three.js）。
+//  本檔案為純前端腳本，不載入 Three.js（config.js 是純資料，可以直接 import）。
 // ============================================================
+
+import { KARTS, PAINTS, DRIVERS } from './config.js';
 
 // 道具名稱對應 Emoji 圖示
 const ITEM_ICONS = {
@@ -38,6 +42,24 @@ const itemIcon = document.getElementById('item-icon');
 const itemStars = document.getElementById('item-stars');
 const waitingOverlay = document.getElementById('waiting-overlay');
 const flashOverlay = document.getElementById('flash-overlay');
+const lookPanel = document.getElementById('look-panel');
+const lookKarts = document.getElementById('look-karts');
+const lookPaints = document.getElementById('look-paints');
+const lookDrivers = document.getElementById('look-drivers');
+const lookCanvas = document.getElementById('look-canvas');
+const lookPreviewName = document.getElementById('look-preview-name');
+const lookMapName = document.getElementById('look-map-name');
+const btnLook = document.getElementById('btn-look');
+const btnLookClose = document.getElementById('btn-look-close');
+
+// 造型選擇狀態（以大螢幕回傳的 status 為準）
+let myKart = 0;
+let myDriver = 0;
+let lookPreview = null; // 3D 預覽（動態載入 Three.js，失敗時維持 null，不影響選擇）
+let myPaint = 0;
+let takenPaints = [];
+let lookPanelClosed = false; // 玩家自己按「收起」後，本次大廳不再自動彈出
+let lastState = null;
 
 // 控制器狀態
 let ws = null;
@@ -353,6 +375,117 @@ function triggerFeedback(ms = 300) {
 // ------------------------------------------------------------
 // 5. 連線清理與中斷處理
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// 造型選擇面板
+// ------------------------------------------------------------
+// 動態載入 3D 預覽模組（Three.js 載入失敗也不會讓整個控制器壞掉）
+function ensureLookPreview() {
+  if (lookPreview !== null) return;
+  lookPreview = false;
+  import('./lookPreview.js')
+    .then(({ LookPreview }) => {
+      lookPreview = new LookPreview(lookCanvas);
+      updatePreview();
+      if (!lookPanel.classList.contains('hidden')) lookPreview.start();
+    })
+    .catch((err) => {
+      console.warn('3D 預覽載入失敗：', err);
+      lookPanel.classList.add('no-webgl');
+    });
+}
+
+function updatePreview() {
+  const driver = DRIVERS[myDriver] || DRIVERS[0];
+  const kart = KARTS[myKart] || KARTS[0];
+  // 角色能力也顯示在預覽下方（資料來自 config.js，不含使用者輸入）
+  lookPreviewName.innerHTML = `${driver.emoji} ${driver.name}（${driver.title}）<br><small>${kart.emoji} ${kart.character}：${kart.ability}</small>`;
+  if (lookPreview) {
+    lookPreview.setLook({ kart: myKart, driver: myDriver, color: (PAINTS[myPaint] || PAINTS[0]).hex });
+  }
+}
+
+function renderLookPanel() {
+  lookKarts.innerHTML = KARTS.map((k, i) => `
+    <button class="look-kart ${i === myKart ? 'selected' : ''}" data-kart="${i}">
+      <span class="look-kart-emoji">${k.emoji}</span>
+      <span class="look-kart-name">${k.character}</span>
+      <span class="look-kart-ability">${k.ability}</span>
+    </button>
+  `).join('');
+
+  lookDrivers.innerHTML = DRIVERS.map((d, i) => `
+    <button class="look-driver ${i === myDriver ? 'selected' : ''}" data-driver="${i}">
+      <span class="look-driver-emoji">${d.emoji}</span>
+      <span class="look-driver-name">${d.name}</span>
+    </button>
+  `).join('');
+
+  lookPaints.innerHTML = PAINTS.map((p, i) => {
+    const taken = takenPaints.includes(i);
+    return `
+      <button class="look-paint ${i === myPaint ? 'selected' : ''} ${taken ? 'taken' : ''}"
+        data-paint="${i}" style="background:${p.hex}" ${taken ? 'disabled' : ''} aria-label="${p.name}">
+        <span>${p.name}</span>
+      </button>
+    `;
+  }).join('');
+
+  updatePreview();
+}
+
+function sendCustomize(look) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'customize', ...look }));
+}
+
+function setLookPanelVisible(visible) {
+  lookPanel.classList.toggle('hidden', !visible);
+  if (visible) {
+    ensureLookPreview();
+    if (lookPreview) lookPreview.start();
+  } else if (lookPreview) {
+    lookPreview.stop();
+  }
+}
+
+lookKarts.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-kart]');
+  if (!btn) return;
+  myKart = Number(btn.dataset.kart);
+  myDriver = KARTS[myKart].driver ?? myDriver; // 換角色時車手跟著換成該角色的預設車手
+  renderLookPanel();
+  sendCustomize({ kart: myKart });
+  try { navigator.vibrate?.(15); } catch (e) {}
+});
+
+lookPaints.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-paint]');
+  if (!btn || btn.disabled) return;
+  myPaint = Number(btn.dataset.paint);
+  renderLookPanel();
+  sendCustomize({ paint: myPaint });
+  try { navigator.vibrate?.(15); } catch (e) {}
+});
+
+lookDrivers.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-driver]');
+  if (!btn) return;
+  myDriver = Number(btn.dataset.driver);
+  renderLookPanel();
+  sendCustomize({ driver: myDriver });
+  try { navigator.vibrate?.(15); } catch (e) {}
+});
+
+btnLookClose.addEventListener('click', () => {
+  lookPanelClosed = true;
+  setLookPanelVisible(false);
+});
+
+btnLook.addEventListener('click', () => {
+  lookPanelClosed = false;
+  setLookPanelVisible(true);
+});
+
 function cleanupConnection() {
   isConnected = false;
   isThrottlePressed = false;
@@ -378,6 +511,8 @@ function cleanupConnection() {
   window.removeEventListener('deviceorientation', handleDeviceOrientation, true);
 
   hasMotionSensor = false;
+  lastState = null;
+  setLookPanelVisible(false);
   targetSteer = 0;
   smoothedSteer = 0;
   rawTiltDeg = 0;
@@ -524,8 +659,21 @@ btnStart.addEventListener('click', async () => {
       return;
     }
 
-    // 收到遊戲狀態（名次、圈數、道具與等級、車色）
+    // 收到遊戲狀態（名次、圈數、道具與等級、車色、造型）
     if (msg.type === 'status') {
+      // 造型選擇：只在大廳顯示面板
+      if (Number.isInteger(msg.kart)) myKart = msg.kart;
+      if (Number.isInteger(msg.driver)) myDriver = msg.driver;
+      if (Number.isInteger(msg.paint)) myPaint = msg.paint;
+      takenPaints = Array.isArray(msg.takenPaints) ? msg.takenPaints : [];
+      if (msg.mapName) lookMapName.textContent = msg.difficultyName ? `${msg.mapName}｜難度：${msg.difficultyName}` : msg.mapName;
+      const inLobby = msg.state === 'lobby';
+      if (inLobby && lastState !== 'lobby') lookPanelClosed = false; // 每次回到大廳都重新彈出
+      lastState = msg.state;
+      renderLookPanel();
+      setLookPanelVisible(inLobby && !lookPanelClosed);
+      btnLook.classList.toggle('hidden', !inLobby);
+
       // 玩家車輛顏色背景
       if (msg.color) {
         topBar.style.backgroundColor = msg.color;
